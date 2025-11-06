@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI 智能知识库系统</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        padding: 20px;
+      }
+      
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+      }
+      
+      .header {
+        text-align: center;
+        color: white;
+        margin-bottom: 40px;
+      }
+      
+      .header h1 {
+        font-size: 2.5rem;
+        font-weight: 700;
+        margin-bottom: 10px;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+      }
+      
+      .header p {
+        font-size: 1.1rem;
+        opacity: 0.9;
+      }
+      
+      .card {
+        background: white;
+        border-radius: 16px;
+        padding: 24px;
+        margin: 20px 0;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255,255,255,0.2);
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+      }
+      
+      .card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 15px 40px rgba(0,0,0,0.15);
+      }
+      
+      .card h3 {
+        color: #2d3748;
+        margin-bottom: 16px;
+        font-size: 1.3rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+      }
+      
+      .card h3::before {
+        content: '';
+        width: 4px;
+        height: 20px;
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        margin-right: 12px;
+        border-radius: 2px;
+      }
+      
+      .form-group {
+        margin-bottom: 16px;
+      }
+      
+      .form-row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        margin-bottom: 16px;
+        flex-wrap: wrap;
+      }
+      
+      input, select, textarea {
+        font-size: 14px;
+        padding: 12px 16px;
+        border: 2px solid #e2e8f0;
+        border-radius: 8px;
+        transition: all 0.3s ease;
+        font-family: inherit;
+      }
+      
+      input:focus, select:focus, textarea:focus {
+        outline: none;
+        border-color: #667eea;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+      }
+      
+      input[type="file"] {
+        padding: 8px;
+        background: #f7fafc;
+      }
+      
+      input[type="number"] {
+        width: 100px;
+      }
+      
+      button {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+      }
+      
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+      }
+      
+      button:active {
+        transform: translateY(0);
+      }
+      
+      button.secondary {
+        background: linear-gradient(135deg, #718096, #4a5568);
+        box-shadow: 0 4px 15px rgba(113, 128, 150, 0.3);
+      }
+      
+      button.secondary:hover {
+        box-shadow: 0 6px 20px rgba(113, 128, 150, 0.4);
+      }
+      
+      button.danger {
+        background: linear-gradient(135deg, #fc8181, #f56565);
+        box-shadow: 0 4px 15px rgba(252, 129, 129, 0.3);
+      }
+      
+      button.danger:hover {
+        box-shadow: 0 6px 20px rgba(252, 129, 129, 0.4);
+      }
+      
+      .output {
+        background: #f7fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 16px;
+        margin-top: 16px;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 13px;
+        line-height: 1.5;
+        max-height: 300px;
+        overflow-y: auto;
+      }
+      
+      .answer-box {
+        background: linear-gradient(135deg, #edf2f7, #e2e8f0);
+        border-radius: 12px;
+        padding: 20px;
+        margin-top: 16px;
+      }
+      
+      .answer-content {
+        background: #2d3748;
+        color: #c9e0ff;
+        padding: 16px;
+        border-radius: 8px;
+        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+        font-size: 14px;
+        line-height: 1.6;
+        margin-bottom: 12px;
+        white-space: pre-wrap;
+      }
+      
+      .answer-sources {
+        color: #4a5568;
+        font-size: 12px;
+        font-style: italic;
+      }
+      
+      .status-indicator {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 8px;
+        background: #48bb78;
+      }
+      
+      .status-indicator.loading {
+        background: #ed8936;
+        animation: pulse 1.5s infinite;
+      }
+      
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      
+      .kb-selector {
+        min-width: 150px;
+      }
+      
+      .full-width {
+        width: 100%;
+      }
+      
+      .large-input {
+        width: 70%;
+      }
+      
+      .medium-input {
+        width: 45%;
+      }
+      
+      .small-input {
+        width: 30%;
+      }
+      
+      @media (max-width: 768px) {
+        .header h1 {
+          font-size: 2rem;
+        }
+        
+        .form-row {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        
+        .large-input, .medium-input, .small-input {
+          width: 100%;
+        }
+        
+        input[type="number"] {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>🧠 AI 智能知识库系统</h1>
+        <p>基于 FastAPI + LangChain + Ollama 的智能问答平台</p>
+      </div>
+
+      <div class="card">
+        <h3>📚 知识库管理</h3>
+        <div class="form-row">
+          <input id="kbName" class="medium-input" placeholder="输入知识库名称（如：技术文档）" />
+          <button onclick="createKb()">✨ 创建知识库</button>
+          <button onclick="loadKbs()" class="secondary">🔄 刷新列表</button>
+          <select id="kbSelect" class="kb-selector">
+            <option value="">选择知识库</option>
+          </select>
+          <button onclick="delKb()" class="danger">🗑️ 删除</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>📁 文件上传</h3>
+        <div class="form-group">
+          <input id="files" type="file" multiple class="full-width" />
+          <small style="color: #718096;">支持格式：.txt, .md, .py, .java, .sql, .csv, .json</small>
+        </div>
+        <button onclick="uploadFiles()">📤 上传并处理</button>
+        <div id="uploadOut" class="output" style="display: none;"></div>
+      </div>
+
+      <div class="card">
+        <h3>🌐 Git 仓库导入</h3>
+        <div class="form-group">
+          <input id="gitUrl" class="large-input" placeholder="https://github.com/用户名/仓库名.git" />
+        </div>
+        <div class="form-row">
+          <input id="gitBranch" class="small-input" placeholder="分支（可选）" />
+          <input id="gitUser" class="small-input" placeholder="用户名（可选）" />
+          <input id="gitToken" class="small-input" placeholder="令牌（可选）" />
+        </div>
+        <button onclick="ingestGit()">🔄 导入仓库</button>
+        <div id="gitOut" class="output" style="display: none;"></div>
+      </div>
+
+      <div class="card">
+        <h3>💬 智能问答</h3>
+        <div class="form-group">
+          <textarea id="question" rows="4" class="full-width" placeholder="在这里输入您的问题，AI 将基于知识库内容为您提供答案..."></textarea>
+        </div>
+        <div class="form-row">
+          <div style="display: flex; align-items: center;">
+            <span style="margin-right: 8px;">返回结果数量：</span>
+            <input id="topk" type="number" value="4" min="1" max="10" />
+          </div>
+          <button onclick="ask()">🚀 提交问题</button>
+        </div>
+        <div id="answer" class="answer-box" style="display: none;">
+          <div class="answer-content" id="answerContent"></div>
+          <div class="answer-sources" id="answerSources"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      let currentKb = '';
+
+      async function loadKbs(){
+        try {
+          const r = await fetch('/kb');
+          const j = await r.json();
+          const sel = document.getElementById('kbSelect');
+          sel.innerHTML = '<option value="">选择知识库</option>';
+          (j.items||[]).forEach(name => {
+            const o = document.createElement('option'); 
+            o.value = name; 
+            o.textContent = name; 
+            sel.appendChild(o);
+          });
+          if (currentKb && j.items.includes(currentKb)) {
+            sel.value = currentKb;
+          }
+        } catch (error) {
+          console.error('加载知识库失败:', error);
+        }
+      }
+
+      async function createKb(){
+        const name = document.getElementById('kbName').value.trim();
+        if(!name) return alert('请输入知识库名称');
+        
+        try {
+          const response = await fetch('/kb', {
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify({name})
+          });
+          
+          if (response.ok) {
+            document.getElementById('kbName').value = '';
+            await loadKbs();
+            // 自动选择新创建的知识库
+            document.getElementById('kbSelect').value = name;
+            currentKb = name;
+            alert('✅ 知识库创建成功！');
+          } else {
+            alert('❌ 创建知识库失败，请重试');
+          }
+        } catch (error) {
+          alert('❌ 网络错误，请检查连接');
+        }
+      }
+
+      async function delKb(){
+        const sel = document.getElementById('kbSelect');
+        if(!sel.value) return alert('请选择要删除的知识库');
+        
+        if (!confirm(`确定要删除知识库 "${sel.value}" 吗？此操作不可恢复。`)) {
+          return;
+        }
+        
+        try {
+          const response = await fetch('/kb/' + sel.value, {method: 'DELETE'});
+          if (response.ok) {
+            currentKb = '';
+            await loadKbs();
+            alert('✅ 知识库删除成功！');
+          } else {
+            alert('❌ 删除失败，请重试');
+          }
+        } catch (error) {
+          alert('❌ 网络错误，请检查连接');
+        }
+      }
+
+      async function uploadFiles(){
+        const sel = document.getElementById('kbSelect');
+        if(!sel.value) return alert('请先选择知识库');
+        
+        const files = document.getElementById('files').files;
+        if (files.length === 0) return alert('请选择要上传的文件');
+        
+        const fd = new FormData();
+        for(const f of files) { 
+          fd.append('files', f); 
+        }
+        
+        const output = document.getElementById('uploadOut');
+        output.style.display = 'block';
+        output.textContent = '📤 正在上传和处理文件，请稍候...';
+        
+        try {
+          const r = await fetch(`/kb/${sel.value}/upload`, {method: 'POST', body: fd});
+          const j = await r.json();
+          output.textContent = JSON.stringify(j, null, 2);
+          if (r.ok) {
+            alert('✅ 文件上传成功！');
+            document.getElementById('files').value = '';
+          }
+        } catch (error) {
+          output.textContent = '❌ 上传失败: ' + error.message;
+        }
+      }
+
+      async function ingestGit(){
+        const sel = document.getElementById('kbSelect');
+        if(!sel.value) return alert('请先选择知识库');
+        
+        const gitUrl = document.getElementById('gitUrl').value.trim();
+        if (!gitUrl) return alert('请输入 Git 仓库地址');
+        
+        const output = document.getElementById('gitOut');
+        output.style.display = 'block';
+        output.textContent = '🔄 正在导入 Git 仓库，请稍候...';
+        
+        const body = {
+          repo_url: gitUrl, 
+          branch: document.getElementById('gitBranch').value.trim() || null, 
+          username: document.getElementById('gitUser').value.trim() || null, 
+          token: document.getElementById('gitToken').value.trim() || null
+        };
+        
+        try {
+          const r = await fetch(`/kb/${sel.value}/git`, {
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify(body)
+          });
+          const j = await r.json();
+          output.textContent = JSON.stringify(j, null, 2);
+          if (r.ok) {
+            alert('✅ Git 仓库导入成功！');
+            document.getElementById('gitUrl').value = '';
+            document.getElementById('gitBranch').value = '';
+            document.getElementById('gitUser').value = '';
+            document.getElementById('gitToken').value = '';
+          }
+        } catch (error) {
+          output.textContent = '❌ 导入失败: ' + error.message;
+        }
+      }
+
+      async function ask(){
+        const sel = document.getElementById('kbSelect');
+        if(!sel.value) return alert('请先选择知识库');
+        
+        const question = document.getElementById('question').value.trim();
+        if (!question) return alert('请输入您的问题');
+        
+        const answerBox = document.getElementById('answer');
+        const answerContent = document.getElementById('answerContent');
+        const answerSources = document.getElementById('answerSources');
+        
+        answerBox.style.display = 'block';
+        answerContent.textContent = '🤔 AI 正在思考中，请稍候...';
+        answerSources.textContent = '';
+        
+        const body = {
+          kb: sel.value, 
+          question: question, 
+          top_k: parseInt(document.getElementById('topk').value) || 4
+        };
+        
+        try {
+          const r = await fetch('/chat', {
+            method: 'POST', 
+            headers: {'Content-Type': 'application/json'}, 
+            body: JSON.stringify(body)
+          });
+          const j = await r.json();
+          
+          if (r.ok && j.answer) {
+            answerContent.textContent = j.answer;
+            if (j.sources && j.sources.length > 0) {
+              answerSources.textContent = '📚 参考来源: ' + j.sources.map(s => s.source).join(', ');
+            } else {
+              answerSources.textContent = '📚 未找到相关参考来源';
+            }
+          } else {
+            answerContent.textContent = '❌ 获取答案失败: ' + (j.error || '未知错误');
+          }
+        } catch (error) {
+          answerContent.textContent = '❌ 网络错误，请检查连接';
+        }
+      }
+
+      // 监听知识库选择变化
+      document.getElementById('kbSelect').addEventListener('change', function() {
+        currentKb = this.value;
+      });
+
+      // 页面加载时初始化
+      loadKbs();
+    </script>
+  </body>
+</html>
