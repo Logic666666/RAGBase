@@ -20,9 +20,21 @@ class RagService:
         self.vs = VectorStore(settings)
 
     def _llm(self) -> ChatOllama:
+        """
+        创建聊天模型实例（用于问答生成）
+        
+        模型配置说明：
+        - 优先使用新的chat_model配置，如果没有则使用旧的deepseek_model作为后备
+        - 这样可以独立配置问答模型，不受嵌入模型影响
+        
+        Returns:
+            配置好的ChatOllama实例，用于对话生成
+        """
+        # 优先使用新的chat_model配置，如果没有则使用旧的deepseek_model作为后备
+        model_name = self.settings.chat_model or self.settings.deepseek_model
         return ChatOllama(
             base_url=self.settings.ollama_base_url,
-            model=self.settings.deepseek_model,
+            model=model_name,
             temperature=0.2,
         )
 
