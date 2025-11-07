@@ -95,8 +95,17 @@ class VectorStore:
         # 创建Chroma向量存储实例
         # Chroma会自动调用embedding_function将文本转换为向量
         # 向量化过程：文本 -> 嵌入模型 -> 向量表示 -> 向量数据库存储
+        # 生成安全的集合名称（只包含字母数字字符）
+        safe_collection_name = f"kb_{os.path.basename(persist_dir)}"
+        # 移除非字母数字字符
+        import re
+        safe_collection_name = re.sub(r'[^a-zA-Z0-9_]', '_', safe_collection_name)
+        # 确保名称长度符合要求
+        if len(safe_collection_name) < 3:
+            safe_collection_name = "kb_collection_default"
+        
         vs = Chroma(
-            collection_name="kb",
+            collection_name=safe_collection_name,
             embedding_function=self._embeddings(),
             persist_directory=persist_dir
         )

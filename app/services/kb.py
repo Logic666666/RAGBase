@@ -70,7 +70,12 @@ class KnowledgeBaseService:
         Returns:
             向量存储目录的绝对路径
         """
-        return os.path.join(self.settings.data_dir, "vectorstore", name)
+        # 修复路径计算，确保与向量存储服务使用相同的路径
+        vector_path = os.path.join(self.settings.data_dir, "vectorstore", name)
+        # 添加调试日志
+        import logging
+        logging.debug(f"知识库 '{name}' 向量存储路径: {vector_path}")
+        return vector_path
 
     # ------------------------------
     # 知识库管理方法
@@ -101,18 +106,228 @@ class KnowledgeBaseService:
             return []
         return sorted([d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))])
 
-    def delete_kb(self, name: str) -> None:
+    def delete_kb(self, name: str) -> bool:
         """
         删除指定的知识库及其所有内容
         
         该方法会删除知识库的源文件目录和向量存储目录，
-        如果目录不存在则忽略错误。
+        并返回删除操作的实际结果。
         
         Args:
             name: 要删除的知识库名称
+            
+        Returns:
+            bool: 如果所有目录都被成功删除则返回True，否则返回False
         """
-        shutil.rmtree(self.kb_root(name), ignore_errors=True)
-        shutil.rmtree(self.kb_vector_dir(name), ignore_errors=True)
+        # 记录初始状态
+        initial_root_exists = os.path.exists(self.kb_root(name))
+        initial_vector_exists = os.path.exists(self.kb_vector_dir(name))
+        
+        # 如果两个目录都不存在，直接返回True
+        if not initial_root_exists and not initial_vector_exists:
+            return True
+            
+        # 尝试删除目录，处理Windows权限问题
+        try:
+            if initial_root_exists:
+                # 对于Windows系统，先尝试修改文件权限
+                if os.name == 'nt':
+                    self._modify_windows_permissions(self.kb_root(name))
+                shutil.rmtree(self.kb_root(name))
+                
+            if initial_vector_exists:
+                if os.name == 'nt':
+                    self._modify_windows_permissions(self.kb_vector_dir(name))
+                shutil.rmtree(self.kb_vector_dir(name))
+                
+        except Exception as e:
+            # 第一次删除失败，尝试使用更激进的方法
+            try:
+                if initial_root_exists and os.path.exists(self.kb_root(name)):
+                    if os.name == 'nt':
+                        # 使用Windows命令行强制删除
+                        import subprocess
+                        # 使用PowerShell命令强制删除（最高权限）
+                        subprocess.run(
+                            ['powershell', '-Command', 'Remove-Item', '-Path', f'"{self.kb_root(name)}"', '-Recurse', '-Force', '-ErrorAction', 'Stop'],
+                            check=True,
+                            capture_output=True,
+                            text=True
+                        )
+                    else:
+                        # Linux/macOS系统使用chmod + rm -rf
+                        subprocess.run(
+                            ['chmod', '-R', '777', self.kb_root(name)],
+                            check=True
+                        )
+                        shutil.rmtree(self.kb_root(name))
+                        
+                if initial_vector_exists and os.path.exists(self.kb_vector_dir(name)):
+                    if os.name == 'nt':
+                        import subprocess
+                        subprocess.run(
+                            ['cmd', '/c', 'rmdir', '/s', '/q', self.kb_vector_dir(name)],
+                            check=True,
+                            capture_output=True,
+                            text=True
+                        )
+                    else:
+                        subprocess.run(
+                            ['chmod', '-R', '777', self.kb_vector_dir(name)],
+                            check=True
+                        )
+                        shutil.rmtree(self.kb_vector_dir(name))
+            except Exception as e:
+                # 记录删除失败的异常信息
+                import logging
+                logging.error(f"删除知识库 '{name}' 失败: {str(e)}")
+                return False
+                
+        # 验证删除结果
+        root_deleted = not os.path.exists(self.kb_root(name))
+        vector_deleted = not os.path.exists(self.kb_vector_dir(name))
+        
+        return root_deleted and vector_deleted
+        
+    def _modify_windows_permissions(self, path: str) -> None:
+        """修改Windows系统文件权限以允许删除"""
+        import ctypes
+        from ctypes import wintypes
+        
+        # 设置文件权限常量
+        FILE_READ_DATA = 0x0001
+        FILE_WRITE_DATA = 0x0002
+        FILE_DELETE = 0x00010000
+        
+        # 获取当前进程令牌
+        hToken = wintypes.HANDLE()
+        if not ctypes.windll.advapi32.OpenProcessToken(
+            ctypes.windll.kernel32.GetCurrentProcess(),
+            0x0020 | 0x0008,  # TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY
+            ctypes.byref(hToken)
+        ):
+            return
+            
+        # 启用删除权限
+        luid = wintypes.LUID()
+        if ctypes.windll.advapi32.LookupPrivilegeValueW(
+            None, "SeDeleteFilePrivilege", ctypes.byref(luid)
+        ):
+            tp = ctypes.create_string_buffer(1024)
+            ctypes.cast(tp, ctypes.POINTER(wintypes.TOKEN_PRIVILEGES)).contents.PrivilegeCount = 1
+            ctypes.cast(tp, ctypes.POINTER(wintypes.TOKEN_PRIVILEGES)).contents.Privileges[0].Luid = luid
+            ctypes.cast(tp, ctypes.POINTER(wintypes.TOKEN_PRIVILEGES)).contents.Privileges[0].Attributes = 0x00000002  # SE_PRIVILEGE_ENABLED
+            
+            ctypes.windll.advapi32.AdjustTokenPrivileges(
+                hToken, False, ctypes.cast(tp, ctypes.POINTER(wintypes.TOKEN_PRIVILEGES)),
+                0, None, None
+            )
+        
+        # 递归修改目录权限
+        for root, dirs, files in os.walk(path):
+            for name in dirs + files:
+                item_path = os.path.join(root, name)
+                try:
+                    # 获取文件句柄
+                    hFile = ctypes.windll.kernel32.CreateFileW(
+                        item_path,
+                        FILE_READ_DATA | FILE_WRITE_DATA | FILE_DELETE,
+                        0x0007,  # FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+                        None,
+                        3,  # OPEN_EXISTING
+                        0x02000000,  # FILE_ATTRIBUTE_NORMAL
+                        None
+                    )
+                    
+                    if hFile != wintypes.HANDLE(-1).value:
+                        # 获取当前安全描述符
+                        pSD = wintypes.LPVOID()
+                        if ctypes.windll.kernel32.GetSecurityInfo(
+                            hFile,
+                            1,  # SE_FILE_OBJECT
+                            0, None, None, None, None,
+                            ctypes.byref(pSD)
+                        ) == 0:
+                            # 设置所有者为当前用户
+                            ctypes.windll.kernel32.SetSecurityInfo(
+                                hFile,
+                                1,  # SE_FILE_OBJECT
+                                0x00000001,  # OWNER_SECURITY_INFORMATION
+                                None, None, None, pSD
+                            )
+                        ctypes.windll.kernel32.CloseHandle(hFile)
+                except Exception:
+                    continue
+        
+        # 如果两个目录都不存在，直接返回True
+        if not initial_root_exists and not initial_vector_exists:
+            return True
+            
+        # 尝试删除目录，处理Windows权限问题
+        try:
+            if initial_root_exists:
+                # 对于Windows系统，先尝试修改文件权限
+                if os.name == 'nt':
+                    self._modify_windows_permissions(self.kb_root(name))
+                shutil.rmtree(self.kb_root(name))
+                
+            if initial_vector_exists:
+                if os.name == 'nt':
+                    self._modify_windows_permissions(self.kb_vector_dir(name))
+                shutil.rmtree(self.kb_vector_dir(name))
+                
+        except Exception as e:
+            # 第一次删除失败，尝试使用更激进的方法
+            try:
+                if initial_root_exists and os.path.exists(self.kb_root(name)):
+                    if os.name == 'nt':
+                        # 使用Windows命令行强制删除
+                        import subprocess
+                        subprocess.run(
+                            ['cmd', '/c', 'rmdir', '/s', '/q', self.kb_root(name)],
+                            check=True,
+                            capture_output=True,
+                            text=True
+                        )
+                    else:
+                        # Linux/macOS系统使用chmod + rm -rf
+                        subprocess.run(
+                            ['chmod', '-R', '777', self.kb_root(name)],
+                            check=True
+                        )
+                        shutil.rmtree(self.kb_root(name))
+                        
+                if initial_vector_exists and os.path.exists(self.kb_vector_dir(name)):
+                    if os.name == 'nt':
+                        import subprocess
+                        subprocess.run(
+                            ['cmd', '/c', 'rmdir', '/s', '/q', self.kb_vector_dir(name)],
+                            check=True,
+                            capture_output=True,
+                            text=True
+                        )
+                    else:
+                        subprocess.run(
+                            ['chmod', '-R', '777', self.kb_vector_dir(name)],
+                            check=True
+                        )
+                        shutil.rmtree(self.kb_vector_dir(name))
+            except Exception as e:
+                # 记录删除失败的异常信息
+                import logging
+                logging.error(f"删除知识库 '{name}' 失败: {str(e)}")
+                return False
+        except Exception as e:
+            # 记录删除失败的异常信息
+            import logging
+            logging.error(f"删除知识库 '{name}' 失败: {str(e)}")
+            return False
+            
+        # 验证删除结果
+        root_deleted = not os.path.exists(self.kb_root(name))
+        vector_deleted = not os.path.exists(self.kb_vector_dir(name))
+        
+        return root_deleted and vector_deleted
 
     # ------------------------------
     # 文档导入方法
@@ -184,10 +399,35 @@ class KnowledgeBaseService:
         from git import Repo
         self.create_kb(name)
         
-        # 准备临时目录
-        tmp_dir = os.path.join(self.kb_root(name), "git_tmp")
+        # 准备临时目录 - 使用唯一名称避免冲突
+        import uuid
+        tmp_dir = os.path.join(self.kb_root(name), f"git_tmp_{uuid.uuid4().hex[:8]}")
+        
+        # 确保目录不存在
         if os.path.exists(tmp_dir):
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            # 如果目录已存在，使用更稳健的删除方法
+            import time
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    # 先尝试修改文件权限
+                    for root, dirs, files in os.walk(tmp_dir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            try:
+                                os.chmod(file_path, 0o777)  # 设置完全权限
+                            except:
+                                pass
+                    shutil.rmtree(tmp_dir, ignore_errors=False)
+                    break
+                except (PermissionError, OSError) as e:
+                    if attempt == max_retries - 1:
+                        # 如果还是无法删除，使用ignore_errors=True继续
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+                        break
+                    time.sleep(0.5)  # 等待更长时间后重试
+        
+        # 创建新的空目录
         os.makedirs(tmp_dir, exist_ok=True)
 
         # 构建带有认证信息的URL（如果提供）

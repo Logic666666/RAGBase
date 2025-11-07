@@ -35,6 +35,31 @@ git_processor = GitProcessor()
 vector_store = VectorStoreService()
 ollama_service = OllamaService()
 
+# 获取知识库列表接口
+@router.get("/kb")
+async def list_knowledge_bases():
+    """获取所有知识库列表"""
+    try:
+        from services.kb import KnowledgeBaseService
+        kb_service = KnowledgeBaseService(settings)
+        kb_list = kb_service.list_kb()
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "knowledge_bases": kb_list
+            }
+        )
+    except Exception as e:
+        logger.error(f"获取知识库列表失败: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": f"获取知识库列表失败: {str(e)}"
+            }
+        )
+
 # 健康检查接口
 @router.get("/health", response_model=HealthCheckResponse)
 async def api_health_check():
@@ -90,6 +115,34 @@ async def upload_document(
     except Exception as e:
         logger.error(f"文档处理失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"文档处理失败: {str(e)}")
+
+# 知识库删除接口
+@router.delete("/kb/{knowledge_base_name}")
+async def delete_knowledge_base(knowledge_base_name: str):
+    """删除指定知识库"""
+    try:
+        from services.kb import KnowledgeBaseService
+        kb_service = KnowledgeBaseService(settings)
+        
+        # 调用删除方法并检查结果
+        deletion_success = kb_service.delete_kb(knowledge_base_name)
+        
+        if deletion_success:
+            return JSONResponse(
+                status_code=200,
+                content={"status": "success", "message": f"知识库 '{knowledge_base_name}' 已成功删除"}
+            )
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={"status": "error", "message": f"删除知识库 '{knowledge_base_name}' 失败，请检查权限或文件是否被占用"}
+            )
+    except Exception as e:
+        logger.error(f"删除知识库时发生错误: {str(e)}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"删除知识库失败: {str(e)}"}
+        )
 
 # Git 仓库解析接口
 @router.post("/git/parse", response_model=GitProcessingResponse)
