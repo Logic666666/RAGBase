@@ -7,13 +7,10 @@ class Settings(BaseSettings):
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     
     # 嵌入模型配置（用于文本向量化）
-    embedding_model: str = os.getenv("EMBEDDING_MODEL", "nomic-embed-text")
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "deepseek-r1:1.5b")
     
     # 问答模型配置（用于对话生成）
     chat_model: str = os.getenv("CHAT_MODEL", "deepseek-r1:1.5b")
-    
-    # 为了向后兼容，保留旧的配置项
-    deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-r1:1.5b")
     
     data_dir: str = os.getenv("DATA_DIR", "./data")
 
