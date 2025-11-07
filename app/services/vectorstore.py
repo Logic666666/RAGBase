@@ -93,16 +93,20 @@ class VectorStore:
         metas = [m for _, m in docs]
         
         # 创建Chroma向量存储实例
+        # Chroma会自动调用embedding_function将文本转换为向量
+        # 向量化过程：文本 -> 嵌入模型 -> 向量表示 -> 向量数据库存储
         vs = Chroma(
-            collection_name="kb", 
-            embedding_function=self._embeddings(), 
+            collection_name="kb",
+            embedding_function=self._embeddings(),
             persist_directory=persist_dir
         )
         
         # 添加文本到向量存储
+        # Chroma会自动处理向量化：对每个文本调用嵌入模型生成向量，然后存储
         vs.add_texts(texts=texts, metadatas=metas)
         
-        # 持久化存储
+        # 持久化存储到磁盘
+        # 数据存储位置：persist_directory指定的目录
         vs.persist()
 
     def as_retriever(self, persist_dir: str, top_k: int):
@@ -120,12 +124,16 @@ class VectorStore:
             配置好的向量检索器，可用于相似性搜索
         """
         # 加载已存在的向量存储
+        # Chroma会从persist_directory读取之前存储的向量数据
         vs = Chroma(
-            collection_name="kb", 
-            embedding_function=self._embeddings(), 
+            collection_name="kb",
+            embedding_function=self._embeddings(),
             persist_directory=persist_dir
         )
         
         # 配置检索器，设置返回结果数量
+        # 检索原理：将查询文本向量化，然后在向量空间中搜索相似文档
+        # 相似度计算：基于向量距离（如余弦相似度）
+        # 返回结果：按相似度排序的前top_k个文档
         return vs.as_retriever(search_kwargs={"k": top_k})
 
