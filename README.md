@@ -1,8 +1,10 @@
 ## AI RAG 知识库系统 (FastAPI + LangChain + Ollama DeepSeek)
 
 一个生产就绪、可云端部署的 RAG 服务：
+- 模型分离：独立配置嵌入模型(Embedding)和对话模型(Chat)
 - 后端：FastAPI
-- LLM/嵌入：通过 `langchain-ollama` 使用 Ollama (DeepSeek)
+- 嵌入模型：通过 `langchain-ollama` 使用 Ollama (DeepSeek) 生成向量
+- 对话模型：独立配置的 Ollama 模型用于高质量回答生成
 - 向量数据库：Chroma 持久化存储
 - 数据摄取：上传文本文件或解析 Git 仓库
 - RAG 聊天：基于选定知识库的检索增强生成
@@ -47,7 +49,10 @@ docker compose up -d --build
 创建 `.env` 文件（可选）：
 ```
 OLLAMA_BASE_URL=http://localhost:11434
-DEEPSEEK_MODEL=deepseek-r1:1.5b
+# 嵌入模型（用于文本向量化）
+EMBEDDING_MODEL=deepseek-r1:1.5b
+# 对话模型（用于生成回答）
+CHAT_MODEL=deepseek-r1:1.5b
 DATA_DIR=./data
 ```
 

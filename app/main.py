@@ -13,7 +13,22 @@ from .services.rag import RagService
 app = FastAPI(title="AI RAG Knowledge", version="0.1.0")
 
 # Static minimal UI
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+app.mount("/static", StaticFiles(directory="static", html=True), name="static")
+
+
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    return """
+    <html>
+        <head>
+            <title>AI RAG Knowledge</title>
+            <meta http-equiv="refresh" content="0; url=/static/index.html">
+        </head>
+        <body>
+            <p>Redirecting to <a href="/static/index.html">AI RAG Knowledge Interface</a></p>
+        </body>
+    </html>
+    """
 
 
 class CreateKbBody(BaseModel):
