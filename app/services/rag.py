@@ -64,9 +64,9 @@ class RagService:
         
         # 步骤2：执行向量相似度搜索
         # 原理：将问题文本向量化，计算与存储向量的相似度，返回最相似的文档
-        # 实现：get_relevant_documents() 是 LangChain 框架提供的方法
+        # 实现：使用 invoke() 方法（新版本 LangChain API）
         # 底层调用：Chroma向量数据库的相似度搜索功能
-        docs = retriever.get_relevant_documents(question)
+        docs = retriever.invoke(question)
         
         # 步骤3：构建格式化的上下文，包含文档来源和内容
         # 详细说明：将检索到的文档格式化为标准上下文格式

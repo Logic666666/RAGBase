@@ -31,6 +31,57 @@ class VectorStore:
         """
         self.settings = settings
 
+    def _get_safe_collection_name(self, persist_dir: str) -> str:
+        """
+        生成符合ChromaDB规范的集合名称
+        
+        ChromaDB要求：
+        - 名称必须以字母或数字开头和结尾
+        - 只能包含 [a-zA-Z0-9._-] 字符
+        - 长度在 3-512 之间
+        
+        Args:
+            persist_dir: 向量数据库的持久化存储目录路径
+            
+        Returns:
+            符合ChromaDB规范的集合名称
+        """
+        import re
+        import hashlib
+        
+        dir_name = os.path.basename(persist_dir)
+        # 如果目录名包含非ASCII字符，使用哈希值
+        if not dir_name.isascii():
+            # 使用哈希值确保唯一性和安全性
+            hash_value = hashlib.md5(dir_name.encode('utf-8')).hexdigest()[:8]
+            safe_collection_name = f"kb_{hash_value}"
+        else:
+            # 移除非字母数字字符，但保留字母数字和下划线
+            safe_collection_name = re.sub(r'[^a-zA-Z0-9_]', '_', dir_name)
+            # 移除开头和结尾的下划线
+            safe_collection_name = safe_collection_name.strip('_')
+            # 如果处理后为空或太短，使用哈希值
+            if not safe_collection_name or len(safe_collection_name) < 2:
+                hash_value = hashlib.md5(dir_name.encode('utf-8')).hexdigest()[:8]
+                safe_collection_name = f"kb_{hash_value}"
+            else:
+                safe_collection_name = f"kb_{safe_collection_name}"
+        
+        # 确保名称以字母或数字开头和结尾（ChromaDB要求）
+        safe_collection_name = re.sub(r'^[^a-zA-Z0-9]+', '', safe_collection_name)
+        safe_collection_name = re.sub(r'[^a-zA-Z0-9]+$', '', safe_collection_name)
+        
+        # 确保名称长度符合要求（3-512字符）
+        if len(safe_collection_name) < 3:
+            hash_value = hashlib.md5(dir_name.encode('utf-8')).hexdigest()[:8]
+            safe_collection_name = f"kb{hash_value}"
+        elif len(safe_collection_name) > 512:
+            # 如果太长，截断并添加哈希值确保唯一性
+            hash_value = hashlib.md5(dir_name.encode('utf-8')).hexdigest()[:8]
+            safe_collection_name = safe_collection_name[:500] + hash_value
+        
+        return safe_collection_name
+
     def _embeddings(self) -> OllamaEmbeddings:
         """
         创建Ollama嵌入模型实例（专门用于文本向量化）
@@ -95,14 +146,8 @@ class VectorStore:
         # 创建Chroma向量存储实例
         # Chroma会自动调用embedding_function将文本转换为向量
         # 向量化过程：文本 -> 嵌入模型 -> 向量表示 -> 向量数据库存储
-        # 生成安全的集合名称（只包含字母数字字符）
-        safe_collection_name = f"kb_{os.path.basename(persist_dir)}"
-        # 移除非字母数字字符
-        import re
-        safe_collection_name = re.sub(r'[^a-zA-Z0-9_]', '_', safe_collection_name)
-        # 确保名称长度符合要求
-        if len(safe_collection_name) < 3:
-            safe_collection_name = "kb_collection_default"
+        # 生成安全的集合名称（符合ChromaDB规范：必须以字母或数字开头和结尾）
+        safe_collection_name = self._get_safe_collection_name(persist_dir)
         
         vs = Chroma(
             collection_name=safe_collection_name,
@@ -134,8 +179,10 @@ class VectorStore:
         """
         # 加载已存在的向量存储
         # Chroma会从persist_directory读取之前存储的向量数据
+        # 使用与add_documents相同的集合名称生成逻辑，确保能正确加载
+        safe_collection_name = self._get_safe_collection_name(persist_dir)
         vs = Chroma(
-            collection_name="kb",
+            collection_name=safe_collection_name,
             embedding_function=self._embeddings(),
             persist_directory=persist_dir
         )
