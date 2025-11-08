@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AI 智能知识库系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <style>
       * {
         margin: 0;
@@ -176,12 +177,15 @@
         color: #c9e0ff;
         padding: 16px;
         border-radius: 8px;
-        font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
         font-size: 14px;
         line-height: 1.6;
         margin-bottom: 12px;
-        white-space: pre-wrap;
       }
+      .answer-content h1,.answer-content h2,.answer-content h3,.answer-content h4,.answer-content h5,.answer-content h6{color:#c9e0ff;margin-top:0.5em;margin-bottom:0.3em}
+      .answer-content p{margin:0.3em 0}
+      .answer-content pre{background:#1a202c;padding:0.5em;border-radius:4px;overflow:auto}
+      .answer-content code{background:#1a202c;padding:0.2em 0.4em;border-radius:3px;font-family:'Monaco','Menlo','Ubuntu Mono',monospace;font-size:13px}
+      .answer-content ul,.answer-content ol{margin:0.3em 0 0.3em 1.2em}
       
       .answer-sources {
         color: #4a5568;
@@ -479,7 +483,7 @@
           const j = await r.json();
           
           if (r.ok && j.answer) {
-            answerContent.textContent = j.answer;
+            answerContent.innerHTML = marked.parse(j.answer);
             if (j.sources && j.sources.length > 0) {
               answerSources.textContent = '📚 参考来源: ' + j.sources.map(s => s.source).join(', ');
             } else {
