@@ -1,0 +1,84 @@
+version: "3.9"
+
+services:
+  # Ollama LLM 服务
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rag-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    # 不直接暴露端口，通过内部网络访问
+    networks:
+      - rag-network
+
+  # FastAPI 应用服务
+  app:
+    image: ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG:-latest}
+    container_name: rag-app
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-deepseek-r1:1.5b}
+      - CHAT_MODEL=${CHAT_MODEL:-deepseek-r1:1.5b}
+      - DATA_DIR=/data
+    volumes:
+      - app_data:/data
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Nginx 反向代理服务
+  nginx:
+    image: nginx:alpine
+    container_name: rag-nginx
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/nginx-http.conf:/etc/nginx/nginx-http.conf:ro
+      - ./nginx/nginx-https.conf:/etc/nginx/nginx-https.conf:ro
+      - ./nginx/entrypoint.sh:/docker-entrypoint.d/entrypoint.sh:ro
+      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - ./static:/app/static:ro
+      - nginx_logs:/var/log/nginx
+    entrypoint: ["/bin/sh", "/docker-entrypoint.d/entrypoint.sh"]
+    environment:
+      - USE_SSL=${USE_SSL:-false}
+    networks:
+      - rag-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"] || exit 1
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  ollama_data:
+    driver: local
+  app_data:
+    driver: local
+  nginx_logs:
+    driver: local
+
+networks:
+  rag-network:
+    driver: bridge
