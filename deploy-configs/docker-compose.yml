@@ -31,10 +31,10 @@ services:
       - app_data:/data
     networks:
       - rag-network
-    # 使用非root用户并设置正确的权限
+    # 使用非root用户运行
     user: "1000:1000"
-    # 在容器启动时设置正确的目录权限
-    command: sh -c "chown -R 1000:1000 /data && python -m app.main"
+    # 直接启动 uvicorn 服务
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8090
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 30s
@@ -57,7 +57,6 @@ services:
       - ./nginx/nginx-https.conf:/etc/nginx/nginx-https.conf:ro
       - ./nginx/entrypoint.sh:/docker-entrypoint.d/entrypoint.sh:ro
       - ./nginx/ssl:/etc/nginx/ssl:ro
-      - ./static:/app/static:ro
       - nginx_logs:/var/log/nginx
     entrypoint: ["/bin/sh", "/docker-entrypoint.d/entrypoint.sh"]
     environment:
