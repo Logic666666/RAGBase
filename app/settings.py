@@ -21,10 +21,16 @@ class Settings(BaseSettings):
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     settings = Settings()
-    # Ensure base folders exist
-    os.makedirs(settings.data_dir, exist_ok=True)
-    os.makedirs(os.path.join(settings.data_dir, "vectorstore"), exist_ok=True)
-    os.makedirs(os.path.join(settings.data_dir, "kb"), exist_ok=True)
+    # Ensure base folders exist (with error handling for permission issues)
+    try:
+        os.makedirs(settings.data_dir, exist_ok=True)
+        os.makedirs(os.path.join(settings.data_dir, "vectorstore"), exist_ok=True)
+        os.makedirs(os.path.join(settings.data_dir, "kb"), exist_ok=True)
+    except PermissionError:
+        # Log the error but don't crash the application
+        import logging
+        logging.warning(f"Permission denied when creating directories in {settings.data_dir}. "
+                      f"Application will continue but some features may not work properly.")
     return settings
 
 

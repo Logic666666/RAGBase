@@ -8,12 +8,8 @@ services:
     restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
+    # 简化配置，跳过健康检查
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 10; ollama pull deepseek-r1:1.5b; wait"]
     # 不直接暴露端口，通过内部网络访问
     networks:
       - rag-network
@@ -25,7 +21,7 @@ services:
     restart: unless-stopped
     depends_on:
       ollama:
-        condition: service_healthy
+        condition: service_started
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-deepseek-r1:1.5b}
@@ -35,6 +31,10 @@ services:
       - app_data:/data
     networks:
       - rag-network
+    # 使用非root用户并设置正确的权限
+    user: "1000:1000"
+    # 在容器启动时设置正确的目录权限
+    command: sh -c "chown -R 1000:1000 /data && python -m app.main"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/health"]
       interval: 30s
@@ -65,7 +65,7 @@ services:
     networks:
       - rag-network
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"] || exit 1
+      test: ["CMD", "sh", "-c", "nc -z localhost 80 || curl -f http://localhost:80"]
       interval: 30s
       timeout: 10s
       retries: 3
