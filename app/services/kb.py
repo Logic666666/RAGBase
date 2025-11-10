@@ -378,25 +378,32 @@ class KnowledgeBaseService:
     def ingest_git_repo(self, name: str, repo_url: str, branch: str | None, username: str | None, token: str | None) -> int:
         """
         从Git仓库导入代码文件并构建知识库
-        
+
         处理流程:
         1. 创建知识库目录结构
-        2. 克隆Git仓库到临时目录
+        2. 克隆Git仓库到临时目录（支持重试和Git加速）
         3. 筛选并复制支持的文件类型到知识库
         4. 读取文件内容并分块处理
         5. 将分块后的文本添加到向量存储
-        
+
         Args:
             name: 目标知识库名称
             repo_url: Git仓库URL
             branch: 要克隆的分支名称，None表示使用默认分支
             username: Git认证用户名，None表示不需要认证
             token: Git认证令牌，None表示不需要认证
-            
+
         Returns:
             成功导入向量存储的文档块数量
+
+        Raises:
+            HTTPException: 如果Git克隆失败，包含详细的错误信息
         """
-        from git import Repo
+        from git import Repo, GitCommandError
+        import logging
+        import time
+        import subprocess
+        
         self.create_kb(name)
         
         # 准备临时目录 - 使用唯一名称避免冲突
@@ -406,7 +413,6 @@ class KnowledgeBaseService:
         # 确保目录不存在
         if os.path.exists(tmp_dir):
             # 如果目录已存在，使用更稳健的删除方法
-            import time
             max_retries = 5
             for attempt in range(max_retries):
                 try:
@@ -435,8 +441,61 @@ class KnowledgeBaseService:
         if username and token and repo_url.startswith("https://") and "@" not in repo_url:
             url = repo_url.replace("https://", f"https://{username}:{token}@")
 
-        # 克隆Git仓库
-        Repo.clone_from(url, tmp_dir, branch=branch or None)
+        # 克隆Git仓库（支持重试和错误处理）
+        max_clone_retries = 3
+        retry_delay = 2  # 秒
+        
+        for attempt in range(max_clone_retries):
+            try:
+                # 尝试使用Git加速服务（如果可用）
+                accelerated_url = self._get_accelerated_git_url(url)
+                
+                logging.info(f"克隆Git仓库 (尝试 {attempt + 1}/{max_clone_retries}): {accelerated_url}")
+                
+                # 使用GitPython克隆仓库
+                Repo.clone_from(accelerated_url, tmp_dir, branch=branch or None)
+                break  # 成功则跳出循环
+                
+            except GitCommandError as e:
+                error_msg = str(e)
+                logging.error(f"Git克隆失败 (尝试 {attempt + 1}/{max_clone_retries}): {error_msg}")
+                
+                # 检查是否是JSON解析错误
+                if "Unexpected token" in error_msg and "is not valid JSON" in error_msg:
+                    logging.warning("检测到JSON解析错误，可能是Git服务端返回了HTML错误页面")
+                    
+                if attempt == max_clone_retries - 1:
+                    # 最后一次尝试也失败，清理临时目录并抛出异常
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    # 最后一次尝试也失败，尝试使用Git命令行工具
+                    logging.warning("GitPython克隆失败，尝试使用Git命令行工具...")
+                    if self._fallback_to_git_cli(url, tmp_dir, branch):
+                        break  # 命令行克隆成功
+                    else:
+                        # 清理临时目录并抛出异常
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
+                        from fastapi import HTTPException
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"无法克隆Git仓库: {error_msg}. 请检查仓库URL、认证信息和网络连接。"
+                        )
+                
+                # 等待一段时间后重试
+                time.sleep(retry_delay * (attempt + 1))
+                
+            except Exception as e:
+                error_msg = str(e)
+                logging.error(f"Git克隆过程中发生未知错误 (尝试 {attempt + 1}/{max_clone_retries}): {error_msg}")
+                
+                if attempt == max_clone_retries - 1:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    from fastapi import HTTPException
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Git克隆过程发生未知错误: {error_msg}"
+                    )
+                
+                time.sleep(retry_delay * (attempt + 1))
 
         # 复制支持的文件到知识库源目录
         saved_paths: List[str] = []
@@ -496,3 +555,93 @@ class KnowledgeBaseService:
                 continue
                 
         return list(zip(texts, metadatas))
+
+# ------------------------------
+    # Git加速服务支持
+    # ------------------------------
+    
+    def _get_accelerated_git_url(self, original_url: str) -> str:
+        """
+        获取Git加速服务URL
+        
+        支持多种Git加速服务：
+        1. GitHub: 使用ghproxy.com加速
+        2. GitLab: 使用mirror服务
+        3. Gitee: 使用原生URL
+        4. 其他: 保持原样
+        
+        Args:
+            original_url: 原始Git仓库URL
+            
+        Returns:
+            加速后的Git仓库URL
+        """
+        # 如果URL已经是加速服务，直接返回
+        if "ghproxy.com" in original_url or "mirror" in original_url:
+            return original_url
+            
+        # GitHub加速
+        if "github.com" in original_url:
+            # 使用ghproxy.com加速GitHub
+            accelerated_url = original_url.replace(
+                "https://github.com/", 
+                "https://ghproxy.com/https://github.com/"
+            )
+            import logging
+            logging.info(f"使用GitHub加速服务: {accelerated_url}")
+            return accelerated_url
+            
+        # GitLab加速（如果有镜像服务）
+        elif "gitlab.com" in original_url:
+            # 可以添加GitLab镜像服务，这里保持原样
+            return original_url
+            
+        # Gitee和其他Git服务
+        else:
+            return original_url
+            
+    def _fallback_to_git_cli(self, url: str, target_dir: str, branch: str | None = None) -> bool:
+        """
+        使用Git命令行工具作为备选方案克隆仓库
+        
+        当GitPython失败时，尝试使用系统Git命令
+        
+        Args:
+            url: Git仓库URL
+            target_dir: 目标目录
+            branch: 分支名称
+            
+        Returns:
+            bool: 是否成功克隆
+        """
+        import subprocess
+        import logging
+        
+        try:
+            # 构建Git命令
+            cmd = ["git", "clone"]
+            if branch:
+                cmd.extend(["-b", branch])
+            cmd.extend([url, target_dir])
+            
+            # 执行Git命令
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                timeout=300  # 5分钟超时
+            )
+            
+            if result.returncode == 0:
+                logging.info(f"Git命令行克隆成功: {url}")
+                return True
+            else:
+                logging.error(f"Git命令行克隆失败: {result.stderr}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logging.error("Git克隆超时")
+            return False
+        except Exception as e:
+            logging.error(f"Git命令行执行错误: {e}")
+            return False
