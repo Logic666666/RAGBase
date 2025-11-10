@@ -26,9 +26,7 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-deepseek-r1:1.5b}
       - CHAT_MODEL=${CHAT_MODEL:-deepseek-r1:1.5b}
-      - DATA_DIR=/data
-    volumes:
-      - app_data:/data
+      - DATA_DIR=./data
     networks:
       - rag-network
     # 使用非root用户运行
@@ -72,8 +70,6 @@ services:
 
 volumes:
   ollama_data:
-    driver: local
-  app_data:
     driver: local
   nginx_logs:
     driver: local
