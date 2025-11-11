@@ -399,6 +399,7 @@ class KnowledgeBaseService:
         Raises:
             HTTPException: 如果Git克隆失败，包含详细的错误信息
         """
+        import os
         from git import Repo, GitCommandError
         import logging
         import time
@@ -440,30 +441,64 @@ class KnowledgeBaseService:
         url = repo_url
         if username and token and repo_url.startswith("https://") and "@" not in repo_url:
             url = repo_url.replace("https://", f"https://{username}:{token}@")
+            
+        # 添加Git加速服务支持 - 多代理自动切换
+        import sys  # 确保sys模块可用
+        use_accelerator = True  # 可配置为设置项
+        # 加速服务列表，按优先级排序
+        accelerator_urls = [
+            "https://ghproxy.com/",
+            "https://mirror.ghproxy.com/",
+            "https://github.moeyy.xyz/"
+        ]
+        
+        if use_accelerator and repo_url.startswith("https://github.com"):
+            original_host = "https://github.com"
+            # 尝试所有加速服务，直到找到可用的
+            for i, accelerator_url in enumerate(accelerator_urls):
+                try:
+                    accelerated_url = url.replace(original_host, accelerator_url + original_host)
+                    print(f"[INFO] 尝试Git加速服务 ({i+1}/{len(accelerator_urls)}): {accelerated_url}", file=sys.stderr)
+                    
+                    # 测试加速服务连通性
+                    import requests
+                    timeout = 10  # 10秒超时
+                    test_url = f"{accelerator_url}{original_host}"
+                    response = requests.head(test_url, timeout=timeout)
+                    if response.status_code in [200, 301, 302]:
+                        url = accelerated_url
+                        print(f"[INFO] 成功使用Git加速服务: {accelerator_url}", file=sys.stderr)
+                        break
+                except:
+                    if i == len(accelerator_urls) - 1:  # 最后一个也失败
+                        print(f"[WARNING] 所有Git加速服务均不可用，使用原始URL", file=sys.stderr)
 
         # 克隆Git仓库（支持重试、超时和错误处理）
-        max_clone_retries = 3
-        retry_delay = 2  # 秒
+        max_clone_retries = 5  # 增加重试次数
+        initial_retry_delay = 3  # 初始重试延迟（秒）
         
+        import sys
         for attempt in range(max_clone_retries):
             try:
-                # 尝试使用Git加速服务（如果可用）
-                accelerated_url = self._get_accelerated_git_url(url)
+                # 直接使用原始URL，确保不调用已删除的方法
+                print(f"[INFO] 克隆Git仓库 (尝试 {attempt + 1}/{max_clone_retries}): {url}", file=sys.stderr)
                 
-                logging.info(f"克隆Git仓库 (尝试 {attempt + 1}/{max_clone_retries}): {accelerated_url}")
-                
-                # 使用GitPython克隆仓库，设置超时
+                # 使用GitPython克隆仓库，设置超时和TLS配置
                 import signal
                 from git import Repo
                 
                 # 设置克隆选项，包括超时
                 clone_options = {
-                    'branch': branch or None,
-                    'timeout': self.settings.git_timeout
+                    'branch': branch or None
                 }
+                # 通过环境变量设置Git超时和TLS配置
+                os.environ['GIT_HTTP_LOW_SPEED_TIMEOUT'] = str(self.settings.git_timeout)
+                os.environ['GIT_HTTP_LOW_SPEED_LIMIT'] = '1'  # 1字节/秒，确保超时生效
+                os.environ['GIT_SSL_NO_VERIFY'] = '1'  # 临时禁用SSL验证以解决TLS终止问题
+                os.environ['GIT_CURL_VERBOSE'] = '1'  # 启用详细输出用于调试
                 
-                # 克隆仓库
-                Repo.clone_from(accelerated_url, tmp_dir, **clone_options)
+                # 克隆仓库（使用加速后的URL）
+                Repo.clone_from(url, tmp_dir, **clone_options)
                 break  # 成功则跳出循环
                 
             except GitCommandError as e:
@@ -473,10 +508,8 @@ class KnowledgeBaseService:
                 # 检查是否是JSON解析错误
                 if "Unexpected token" in error_msg and "is not valid JSON" in error_msg:
                     logging.warning("检测到JSON解析错误，可能是Git服务端返回了HTML错误页面")
-                    
+                
                 if attempt == max_clone_retries - 1:
-                    # 最后一次尝试也失败，清理临时目录并抛出异常
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
                     # 最后一次尝试也失败，尝试使用Git命令行工具
                     logging.warning("GitPython克隆失败，尝试使用Git命令行工具...")
                     if self._fallback_to_git_cli(url, tmp_dir, branch):
@@ -572,75 +605,6 @@ class KnowledgeBaseService:
     # Git加速服务支持
     # ------------------------------
     
-    def _get_accelerated_git_url(self, original_url: str) -> str:
-        """
-        获取Git加速服务URL（支持多加速器备选方案）
-        
-        支持多种Git加速服务：
-        1. GitHub: ghproxy.com, fastgit.org, 等多种加速器
-        2. GitLab: 使用mirror服务
-        3. Gitee: 使用原生URL
-        4. 其他: 保持原样
-        
-        Args:
-            original_url: 原始Git仓库URL
-            
-        Returns:
-            加速后的Git仓库URL
-        """
-        # 如果加速器被禁用，直接返回原URL
-        if not self.settings.git_accelerator_enabled:
-            return original_url
-            
-        # 如果URL已经是加速服务，直接返回
-        if any(proxy in original_url for proxy in ["ghproxy.com", "fastgit.org", "mirror"]):
-            return original_url
-            
-        # 获取加速器优先级配置
-        accelerators = [acc.strip() for acc in self.settings.git_accelerator_priority.split(",")]
-        
-        # GitHub加速（多加速器备选）
-        if "github.com" in original_url:
-            for accelerator in accelerators:
-                if accelerator == "ghproxy":
-                    # 使用ghproxy.com加速GitHub
-                    accelerated_url = original_url.replace(
-                        "https://github.com/",
-                        "https://ghproxy.com/https://github.com/"
-                    )
-                    if self._test_git_connection(accelerated_url):
-                        import logging
-                        logging.info(f"使用GitHub加速服务 (ghproxy): {accelerated_url}")
-                        return accelerated_url
-                        
-                elif accelerator == "fastgit":
-                    # 使用fastgit.org加速GitHub
-                    accelerated_url = original_url.replace(
-                        "https://github.com/",
-                        "https://hub.fastgit.org/"
-                    )
-                    if self._test_git_connection(accelerated_url):
-                        import logging
-                        logging.info(f"使用GitHub加速服务 (fastgit): {accelerated_url}")
-                        return accelerated_url
-                        
-                elif accelerator == "original":
-                    # 使用原始URL
-                    if self._test_git_connection(original_url):
-                        return original_url
-            
-            # 所有加速器都失败，返回原始URL
-            return original_url
-            
-        # GitLab加速（如果有镜像服务）
-        elif "gitlab.com" in original_url:
-            # 可以添加GitLab镜像服务，这里保持原样
-            return original_url
-            
-        # Gitee和其他Git服务
-        else:
-            return original_url
-            
     def _test_git_connection(self, url: str) -> bool:
         """
         测试Git连接是否可用
@@ -695,7 +659,10 @@ class KnowledgeBaseService:
             if branch:
                 cmd.extend(["-b", branch])
             
-            # 添加超时和重试参数
+            # 添加超时配置和进度参数
+            import os
+            os.environ['GIT_HTTP_LOW_SPEED_TIMEOUT'] = str(self.settings.git_timeout)
+            os.environ['GIT_HTTP_LOW_SPEED_LIMIT'] = '1'  # 1字节/秒，确保超时生效
             cmd.extend(["--progress", "--verbose"])
             cmd.extend([url, target_dir])
             
