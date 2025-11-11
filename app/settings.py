@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     chat_model: str = os.getenv("CHAT_MODEL", "deepseek-r1:1.5b")
     
     data_dir: str = os.getenv("DATA_DIR", "./data")
+    
+    # 网络超时配置（单位：秒）
+    git_timeout: int = int(os.getenv("GIT_TIMEOUT", "300"))  # 默认5分钟
+    git_connect_timeout: int = int(os.getenv("GIT_CONNECT_TIMEOUT", "30"))  # 默认30秒
+    
+    # Git加速器配置
+    git_accelerator_enabled: bool = os.getenv("GIT_ACCELERATOR_ENABLED", "true").lower() == "true"
+    git_accelerator_priority: str = os.getenv("GIT_ACCELERATOR_PRIORITY", "ghproxy,fastgit,original")
 
     class Config:
         env_file = ".env"

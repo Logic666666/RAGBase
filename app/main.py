@@ -60,7 +60,7 @@ def get_rag_service(settings: Settings = Depends(get_settings)):
 def health(settings: Settings = Depends(get_settings)):
     return {
         "ok": True,
-        "model": settings.deepseek_model,
+        "model": settings.chat_model,
         "ollama": settings.ollama_base_url,
     }
 

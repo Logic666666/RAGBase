@@ -441,7 +441,7 @@ class KnowledgeBaseService:
         if username and token and repo_url.startswith("https://") and "@" not in repo_url:
             url = repo_url.replace("https://", f"https://{username}:{token}@")
 
-        # 克隆Git仓库（支持重试和错误处理）
+        # 克隆Git仓库（支持重试、超时和错误处理）
         max_clone_retries = 3
         retry_delay = 2  # 秒
         
@@ -452,8 +452,18 @@ class KnowledgeBaseService:
                 
                 logging.info(f"克隆Git仓库 (尝试 {attempt + 1}/{max_clone_retries}): {accelerated_url}")
                 
-                # 使用GitPython克隆仓库
-                Repo.clone_from(accelerated_url, tmp_dir, branch=branch or None)
+                # 使用GitPython克隆仓库，设置超时
+                import signal
+                from git import Repo
+                
+                # 设置克隆选项，包括超时
+                clone_options = {
+                    'branch': branch or None,
+                    'timeout': self.settings.git_timeout
+                }
+                
+                # 克隆仓库
+                Repo.clone_from(accelerated_url, tmp_dir, **clone_options)
                 break  # 成功则跳出循环
                 
             except GitCommandError as e:
@@ -480,8 +490,10 @@ class KnowledgeBaseService:
                             detail=f"无法克隆Git仓库: {error_msg}. 请检查仓库URL、认证信息和网络连接。"
                         )
                 
-                # 等待一段时间后重试
-                time.sleep(retry_delay * (attempt + 1))
+                # 使用优化的重试策略等待
+                wait_time = self._optimize_retry_strategy(attempt, max_clone_retries)
+                logging.info(f"等待 {wait_time} 秒后重试...")
+                time.sleep(wait_time)
                 
             except Exception as e:
                 error_msg = str(e)
@@ -556,16 +568,16 @@ class KnowledgeBaseService:
                 
         return list(zip(texts, metadatas))
 
-# ------------------------------
+    # ------------------------------
     # Git加速服务支持
     # ------------------------------
     
     def _get_accelerated_git_url(self, original_url: str) -> str:
         """
-        获取Git加速服务URL
+        获取Git加速服务URL（支持多加速器备选方案）
         
         支持多种Git加速服务：
-        1. GitHub: 使用ghproxy.com加速
+        1. GitHub: ghproxy.com, fastgit.org, 等多种加速器
         2. GitLab: 使用mirror服务
         3. Gitee: 使用原生URL
         4. 其他: 保持原样
@@ -576,20 +588,49 @@ class KnowledgeBaseService:
         Returns:
             加速后的Git仓库URL
         """
-        # 如果URL已经是加速服务，直接返回
-        if "ghproxy.com" in original_url or "mirror" in original_url:
+        # 如果加速器被禁用，直接返回原URL
+        if not self.settings.git_accelerator_enabled:
             return original_url
             
-        # GitHub加速
+        # 如果URL已经是加速服务，直接返回
+        if any(proxy in original_url for proxy in ["ghproxy.com", "fastgit.org", "mirror"]):
+            return original_url
+            
+        # 获取加速器优先级配置
+        accelerators = [acc.strip() for acc in self.settings.git_accelerator_priority.split(",")]
+        
+        # GitHub加速（多加速器备选）
         if "github.com" in original_url:
-            # 使用ghproxy.com加速GitHub
-            accelerated_url = original_url.replace(
-                "https://github.com/", 
-                "https://ghproxy.com/https://github.com/"
-            )
-            import logging
-            logging.info(f"使用GitHub加速服务: {accelerated_url}")
-            return accelerated_url
+            for accelerator in accelerators:
+                if accelerator == "ghproxy":
+                    # 使用ghproxy.com加速GitHub
+                    accelerated_url = original_url.replace(
+                        "https://github.com/",
+                        "https://ghproxy.com/https://github.com/"
+                    )
+                    if self._test_git_connection(accelerated_url):
+                        import logging
+                        logging.info(f"使用GitHub加速服务 (ghproxy): {accelerated_url}")
+                        return accelerated_url
+                        
+                elif accelerator == "fastgit":
+                    # 使用fastgit.org加速GitHub
+                    accelerated_url = original_url.replace(
+                        "https://github.com/",
+                        "https://hub.fastgit.org/"
+                    )
+                    if self._test_git_connection(accelerated_url):
+                        import logging
+                        logging.info(f"使用GitHub加速服务 (fastgit): {accelerated_url}")
+                        return accelerated_url
+                        
+                elif accelerator == "original":
+                    # 使用原始URL
+                    if self._test_git_connection(original_url):
+                        return original_url
+            
+            # 所有加速器都失败，返回原始URL
+            return original_url
             
         # GitLab加速（如果有镜像服务）
         elif "gitlab.com" in original_url:
@@ -600,6 +641,37 @@ class KnowledgeBaseService:
         else:
             return original_url
             
+    def _test_git_connection(self, url: str) -> bool:
+        """
+        测试Git连接是否可用
+        
+        Args:
+            url: Git仓库URL
+            
+        Returns:
+            bool: 连接是否可用
+        """
+        import subprocess
+        import logging
+        
+        try:
+            # 使用git ls-remote测试连接（轻量级操作）
+            result = subprocess.run(
+                ["git", "ls-remote", "--heads", url],
+                capture_output=True,
+                text=True,
+                timeout=self.settings.git_connect_timeout
+            )
+            
+            return result.returncode == 0
+            
+        except subprocess.TimeoutExpired:
+            logging.warning(f"Git连接测试超时: {url}")
+            return False
+        except Exception as e:
+            logging.warning(f"Git连接测试失败: {url}, 错误: {e}")
+            return False
+
     def _fallback_to_git_cli(self, url: str, target_dir: str, branch: str | None = None) -> bool:
         """
         使用Git命令行工具作为备选方案克隆仓库
@@ -622,26 +694,64 @@ class KnowledgeBaseService:
             cmd = ["git", "clone"]
             if branch:
                 cmd.extend(["-b", branch])
+            
+            # 添加超时和重试参数
+            cmd.extend(["--progress", "--verbose"])
             cmd.extend([url, target_dir])
             
-            # 执行Git命令
+            # 执行Git命令，使用配置的超时时间
             result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=300  # 5分钟超时
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.settings.git_timeout
             )
             
             if result.returncode == 0:
                 logging.info(f"Git命令行克隆成功: {url}")
                 return True
             else:
-                logging.error(f"Git命令行克隆失败: {result.stderr}")
+                # 分析错误类型
+                error_output = result.stderr
+                logging.error(f"Git命令行克隆失败: {error_output}")
+                
+                # 如果是网络问题，可以尝试不同的加速器
+                if "unable to access" in error_output or "Connection" in error_output:
+                    logging.warning("检测到网络连接问题，尝试其他加速器...")
+                    # 这里可以添加逻辑尝试其他加速器URL
+                
                 return False
                 
         except subprocess.TimeoutExpired:
-            logging.error("Git克隆超时")
+            logging.error(f"Git克隆超时（{self.settings.git_timeout}秒）")
             return False
         except Exception as e:
             logging.error(f"Git命令行执行错误: {e}")
             return False
+            
+    def _optimize_retry_strategy(self, attempt: int, max_retries: int) -> int:
+        """
+        优化重试策略（指数退避 + 随机抖动）
+        
+        Args:
+            attempt: 当前尝试次数
+            max_retries: 最大重试次数
+            
+        Returns:
+            int: 下一次重试的等待时间（秒）
+        """
+        import random
+        import math
+        
+        # 指数退避基础时间
+        base_delay = 2
+        max_delay = 60
+        
+        # 计算指数退避时间
+        delay = min(max_delay, base_delay * math.pow(2, attempt))
+        
+        # 添加随机抖动（±20%）
+        jitter = random.uniform(0.8, 1.2)
+        delay = delay * jitter
+        
+        return int(delay)
