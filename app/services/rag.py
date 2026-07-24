@@ -4,8 +4,8 @@ from typing import List, Tuple
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from ..settings import Settings
-from .vectorstore import VectorStore
+from ..core.config import Settings
+from ..infrastructure.vector_store import VectorStore
 
 
 SYS_PROMPT = (

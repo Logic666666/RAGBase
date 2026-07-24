@@ -255,35 +255,35 @@
   <body>
     <div class="container">
       <div class="header">
-        <h1>🧠 AI 智能知识库系统</h1>
+        <h1>AI 智能知识库系统</h1>
         <p>基于 FastAPI + LangChain + Ollama 的智能问答平台</p>
       </div>
 
       <div class="card">
-        <h3>📚 知识库管理</h3>
+        <h3>知识库管理</h3>
         <div class="form-row">
           <input id="kbName" class="medium-input" placeholder="输入知识库名称（如：技术文档）" />
-          <button onclick="createKb()">✨ 创建知识库</button>
-          <button onclick="loadKbs()" class="secondary">🔄 刷新列表</button>
+          <button onclick="createKb()">创建知识库</button>
+          <button onclick="loadKbs()" class="secondary">刷新列表</button>
           <select id="kbSelect" class="kb-selector">
             <option value="">选择知识库</option>
           </select>
-          <button onclick="delKb()" class="danger">🗑️ 删除</button>
+          <button onclick="delKb()" class="danger">删除</button>
         </div>
       </div>
 
       <div class="card">
-        <h3>📁 文件上传</h3>
+        <h3>文件上传</h3>
         <div class="form-group">
           <input id="files" type="file" multiple class="full-width" />
           <small style="color: #718096;">支持格式：.txt, .md, .py, .java, .sql, .csv, .json</small>
         </div>
-        <button onclick="uploadFiles()">📤 上传并处理</button>
+        <button onclick="uploadFiles()">上传并处理</button>
         <div id="uploadOut" class="output" style="display: none;"></div>
       </div>
 
       <div class="card">
-        <h3>🌐 Git 仓库导入</h3>
+        <h3>Git 仓库导入</h3>
         <div class="form-group">
           <input id="gitUrl" class="large-input" placeholder="https://github.com/用户名/仓库名.git" />
         </div>
@@ -292,12 +292,12 @@
           <input id="gitUser" class="small-input" placeholder="用户名（可选）" />
           <input id="gitToken" class="small-input" placeholder="令牌（可选）" />
         </div>
-        <button onclick="ingestGit()">🔄 导入仓库</button>
+        <button onclick="ingestGit()">导入仓库</button>
         <div id="gitOut" class="output" style="display: none;"></div>
       </div>
 
       <div class="card">
-        <h3>💬 智能问答</h3>
+        <h3>智能问答</h3>
         <div class="form-group">
           <textarea id="question" rows="4" class="full-width" placeholder="在这里输入您的问题，AI 将基于知识库内容为您提供答案..."></textarea>
         </div>
@@ -306,7 +306,7 @@
             <span style="margin-right: 8px;">返回结果数量：</span>
             <input id="topk" type="number" value="4" min="1" max="10" />
           </div>
-          <button onclick="ask()">🚀 提交问题</button>
+          <button onclick="ask()">提交问题</button>
         </div>
         <div id="answer" class="answer-box" style="display: none;">
           <div class="answer-content" id="answerContent"></div>
@@ -355,12 +355,12 @@
             // 自动选择新创建的知识库
             document.getElementById('kbSelect').value = name;
             currentKb = name;
-            alert('✅ 知识库创建成功！');
+            alert('知识库创建成功！');
           } else {
-            alert('❌ 创建知识库失败，请重试');
+            alert('创建知识库失败，请重试');
           }
         } catch (error) {
-          alert('❌ 网络错误，请检查连接');
+          alert('网络错误，请检查连接');
         }
       }
 
@@ -377,12 +377,12 @@
           if (response.ok) {
             currentKb = '';
             await loadKbs();
-            alert('✅ 知识库删除成功！');
+            alert('知识库删除成功！');
           } else {
-            alert('❌ 删除失败，请重试');
+            alert('删除失败，请重试');
           }
         } catch (error) {
-          alert('❌ 网络错误，请检查连接');
+          alert('网络错误，请检查连接');
         }
       }
 
@@ -400,18 +400,18 @@
         
         const output = document.getElementById('uploadOut');
         output.style.display = 'block';
-        output.textContent = '📤 正在上传和处理文件，请稍候...';
+        output.textContent = '正在上传和处理文件，请稍候...';
         
         try {
           const r = await fetch(`/kb/${sel.value}/upload`, {method: 'POST', body: fd});
           const j = await r.json();
           output.textContent = JSON.stringify(j, null, 2);
           if (r.ok) {
-            alert('✅ 文件上传成功！');
+            alert('文件上传成功！');
             document.getElementById('files').value = '';
           }
         } catch (error) {
-          output.textContent = '❌ 上传失败: ' + error.message;
+          output.textContent = '上传失败: ' + error.message;
         }
       }
 
@@ -424,7 +424,7 @@
         
         const output = document.getElementById('gitOut');
         output.style.display = 'block';
-        output.textContent = '🔄 正在导入 Git 仓库，请稍候...';
+        output.textContent = '正在导入 Git 仓库，请稍候...';
         
         const body = {
           repo_url: gitUrl, 
@@ -442,14 +442,14 @@
           const j = await r.json();
           output.textContent = JSON.stringify(j, null, 2);
           if (r.ok) {
-            alert('✅ Git 仓库导入成功！');
+            alert('Git 仓库导入成功！');
             document.getElementById('gitUrl').value = '';
             document.getElementById('gitBranch').value = '';
             document.getElementById('gitUser').value = '';
             document.getElementById('gitToken').value = '';
           }
         } catch (error) {
-          output.textContent = '❌ 导入失败: ' + error.message;
+          output.textContent = '导入失败: ' + error.message;
         }
       }
 
@@ -465,7 +465,7 @@
         const answerSources = document.getElementById('answerSources');
         
         answerBox.style.display = 'block';
-        answerContent.textContent = '🤔 AI 正在思考中，请稍候...';
+        answerContent.textContent = 'AI 正在思考中，请稍候...';
         answerSources.textContent = '';
         
         const body = {
@@ -485,15 +485,15 @@
           if (r.ok && j.answer) {
             answerContent.innerHTML = marked.parse(j.answer);
             if (j.sources && j.sources.length > 0) {
-              answerSources.textContent = '📚 参考来源: ' + j.sources.map(s => s.source).join(', ');
+              answerSources.textContent = '参考来源: ' + j.sources.map(s => s.source).join(', ');
             } else {
-              answerSources.textContent = '📚 未找到相关参考来源';
+              answerSources.textContent = '未找到相关参考来源';
             }
           } else {
-            answerContent.textContent = '❌ 获取答案失败: ' + (j.error || '未知错误');
+            answerContent.textContent = '获取答案失败: ' + (j.error || '未知错误');
           }
         } catch (error) {
-          answerContent.textContent = '❌ 网络错误，请检查连接';
+          answerContent.textContent = '网络错误，请检查连接';
         }
       }
 

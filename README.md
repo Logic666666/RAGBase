@@ -1,287 +1,288 @@
-## AI RAG 知识库系统 (FastAPI + LangChain + Ollama DeepSeek)
+# AI RAG Knowledge — RAG + Agent 知识管理与研究助手
 
-一个生产就绪、可云端部署的 RAG 服务：
+> 从 RAG 知识库向自主 Agent 架构演进的工程化项目
 
-- 模型分离：独立配置嵌入模型(Embedding)和对话模型(Chat)
-- 后端：FastAPI
-- 嵌入模型：通过 `langchain-ollama` 使用 Ollama (DeepSeek) 生成向量
-- 对话模型：独立配置的 Ollama 模型用于高质量回答生成
-- 向量数据库：Chroma 持久化存储
-- 数据摄取：上传文本文件或解析 Git 仓库
-- RAG 聊天：基于选定知识库的检索增强生成
+---
 
-### 功能特性
+## 项目定位
 
-- 创建/列出/删除知识库 (KB)
-- 上传文件 (`.txt,.md,.py,.java,.sql,.csv,.json`)
-- Git 仓库摄取 (HTTPS + 可选令牌)
-- 使用 `RecursiveCharacterTextSplitter` 进行文本分块
-- 通过 Ollama 使用 DeepSeek 进行上下文查询
-- 本地测试的极简网页界面
+一个**模块化、可扩展**的知识管理与研究系统。当前基于 RAG（Retrieval-Augmented Generation）实现知识库问答，正在逐步演进为**多源 Research Agent**，支持自主规划、多工具协作和结构化报告生成。
 
-### 快速开始 (本地)
+核心设计原则：
 
-1) 安装 Ollama：访问 `https://ollama.com/download`
-2) 拉取 DeepSeek 模型（选择一个）：
+- **手搓基础设施**：不依赖 LangChain 等框架，直接对接 LLM API，掌握底层原理
+- **模块化架构**：基础设施层、Agent 核心、工具系统、业务服务清晰分层
+- **工程化导向**：类型安全、可测试、可观测、配置驱动
 
-```bash
-ollama pull deepseek-r1:1.5b
-# 或：ollama pull deepseek-r1:7b
+---
+
+## 项目结构
+
+```
+ai-rag-knowledge/
+│
+├── app/                                   # ★ 核心应用包
+│   ├── __init__.py
+│   ├── main.py                            # FastAPI 入口
+│   │
+│   ├── api/                               # API 层
+│   │   └── __init__.py                    # （后续拆分路由和 schema）
+│   │
+│   ├── core/                              # 核心配置
+│   │   ├── __init__.py
+│   │   └── config.py                      # Settings + 依赖注入
+│   │
+│   ├── infrastructure/                    # ★ 基础设施层（手搓目标）
+│   │   ├── __init__.py
+│   │   ├── vector_store.py                # 向量数据库封装（Chroma）
+│   │   └── text_splitter.py               # 文本分块策略
+│   │
+│   ├── services/                          # 业务服务层
+│   │   ├── __init__.py
+│   │   ├── kb.py                          # 知识库管理（创建/文件/Git 导入）
+│   │   └── rag.py                         # RAG 问答管线
+│   │
+│   ├── agent/                             # ★ Agent 核心（规划中）
+│   │   └── __init__.py
+│   │
+│   ├── tools/                             # ★ 工具系统（规划中）
+│   │   ├── __init__.py
+│   │   └── builtin/
+│   │       └── __init__.py
+│   │
+│   └── utils/                             # 通用工具
+│       └── __init__.py
+│
+├── tests/                                 # ★ 测试（新增）
+│   ├── __init__.py
+│   ├── unit/                              # 单元测试
+│   └── integration/                       # 集成测试
+│
+├── docs/                                  # ★ 文档集中管理
+│   ├── index.md                           # 项目总览（原 README 迁移）
+│   ├── deployment.md                      # 部署指南（原 DEPLOY.md 迁移）
+│   └── tech-stack.md                      # 技术栈分析（原技术栈.md 迁移）
+│
+├── scripts/                               # ★ 构建脚本
+│   ├── build.sh                           # Docker 构建 + 推送（原 build-and-push.sh）
+│   └── quick-build.sh                     # 快速构建
+│
+├── deploy-configs/                        # 云部署配置
+│   ├── docker-compose.yml
+│   ├── docker-compose.prod.yml
+│   ├── .env                               # 部署环境变量
+│   ├── env.example
+│   ├── deploy.sh
+│   ├── nginx/
+│   │   ├── nginx-http.conf
+│   │   ├── nginx-https.conf
+│   │   ├── entrypoint.sh
+│   │   └── ssl/
+│   └── ...
+│
+├── static/
+│   └── index.html                         # 极简 Web UI
+│
+├── data/                                  # 运行时数据
+│   ├── kb/
+│   └── vectorstore/
+│
+├── pyproject.toml                         # ★ 项目元数据
+├── Makefile                               # ★ 常用命令入口
+├── requirements.txt
+├── Dockerfile
+├── .gitignore
+└── README.md
 ```
 
-3) Python 环境
+### 架构分层
+
+```
+┌───────────────────────────────────────────────────┐
+│                    API 层 (api/)                    │
+│  路由定义 · 请求/响应 Schema · 依赖注入             │
+├───────────────────────────────────────────────────┤
+│                业务服务层 (services/)                │
+│  知识库管理 · RAG 问答管线                          │
+├───────────────────┬───────────────────────────────┤
+│   Agent 核心      │     基础设施层                   │
+│   (agent/)        │   (infrastructure/)            │
+│                    │                                │
+│   · Agent Loop     │   · LLM 客户端（手搓）           │
+│   · 记忆系统       │   · Embedding 客户端（手搓）     │
+│   · 规划模块       │   · 向量存储                    │
+│                    │   · 文本分块                    │
+│  工具系统 (tools/) │                                │
+│   · 工具注册中心   │                                │
+│   · BaseTool 抽象  │                                │
+│   · 内置工具集     │                                │
+└───────────────────┴───────────────────────────────┘
+```
+
+---
+
+## 功能特性
+
+### 当前（RAG 阶段）
+
+- 创建 / 列出 / 删除知识库
+- 文件上传（`.txt` · `.md` · `.py` · `.java` · `.sql` · `.csv` · `.json`）
+- Git 仓库摄取（HTTPS + 可选令牌认证）
+- 智能文本分块（中英文混合优化）
+- 向量检索增强生成（RAG 问答）
+- 来源引用追踪
+
+### 规划中（Agent 阶段）
+
+- 手搓 LLM / Embedding / VectorStore 基础设施
+- ReAct Agent 循环（推理 → 行动 → 观察）
+- 可插拔工具系统（Tool Registry + BaseTool）
+- 分层记忆系统（短期 / 长期 / 工作记忆）
+- 任务规划模块（Plan-and-Solve）
+- 多源 Research Agent + 结构化报告
+
+---
+
+## 快速开始（本地开发）
+
+### 前置条件
+
+1. **安装 Ollama**：[https://ollama.com/download](https://ollama.com/download)
+2. **拉取模型**（可根据需要选择）：
 
 ```bash
+ollama pull bge-m3          # 嵌入模型
+ollama pull deepseek-r1:1.5b  # 对话模型
+```
+
+### 安装与运行
+
+```bash
+# 1. 创建虚拟环境
 python -m venv .venv && .venv/Scripts/activate
+
+# 2. 安装依赖
 pip install -r requirements.txt
-```
 
-4) 运行 API
-
-```bash
+# 3. 启动服务
 uvicorn app.main:app --host 0.0.0.0 --port 8090 --reload
+
+# 或使用 Makefile
+make run
 ```
 
-5) 打开文档：`http://localhost:8090/docs`
-
-### Docker (应用 + Ollama)
+### 验证
 
 ```bash
-docker compose up -d --build
-# 首次运行可能需要一些时间来拉取模型。
-```
-
-服务：
-
-- 应用：`http://localhost:8090`
-- Ollama：`http://localhost:11434`
-
-### 环境配置
-
-项目使用 `.env` 文件管理配置，支持自定义模型、端口、SSL 等多种设置。
-
-#### 配置文件说明
-
-- **`.env.example`**：配置模板文件，包含所有可用配置项
-- **`.env`**：实际使用的配置文件（从 `.env.example` 复制而来）
-
-#### 快速配置
-
-```bash
-# 1. 复制配置模板
-cp env.example .env
-
-# 2. 编辑配置文件，根据需求修改各项参数
-nano .env
-```
-
-#### 核心配置项说明
-
-| 配置项              | 说明            | 默认值                  | 可选值                 |
-| ------------------- | --------------- | ----------------------- | ---------------------- |
-| `OLLAMA_BASE_URL` | Ollama 服务地址 | `http://ollama:11434` | 根据部署环境调整       |
-| `EMBEDDING_MODEL` | 文本嵌入模型    | `deepseek-r1:1.5b`    | 任意 Ollama 支持的模型 |
-| `CHAT_MODEL`      | 对话生成模型    | `deepseek-r1:1.5b`    | 任意 Ollama 支持的模型 |
-| `HTTP_PORT`       | HTTP 端口       | `80`                  | 1024-65535             |
-| `HTTPS_PORT`      | HTTPS 端口      | `443`                 | 1024-65535             |
-| `USE_SSL`         | 是否启用 HTTPS  | `false`               | `true`/`false`     |
-| `DATA_DIR`        | 数据存储目录    | `/data`               | 自定义路径             |
-
-**支持的特性**：
-
-- **智能默认值**：代码中预设了合理的默认配置
-- **自动目录创建**：自动创建必要的数据目录结构
-- **单例模式**：使用 `@lru_cache` 确保配置只加载一次
-- **类型安全**：使用 Pydantic 进行配置验证
-
-#### 模型配置建议
-
-**开发环境**：推荐使用较小的模型以提高响应速度
-
-```bash
-EMBEDDING_MODEL=deepseek-r1:1.5b
-CHAT_MODEL=deepseek-r1:1.5b
-```
-
-**生产环境**：推荐使用较大的模型以获得更好的效果
-
-```bash
-EMBEDDING_MODEL=deepseek-r1:7b
-CHAT_MODEL=deepseek-r1:7b
-```
-
-#### 多环境配置
-
-你可以为不同环境创建不同的配置文件：
-
-```bash
-# 开发环境配置
-cp env.example .env.dev
-# 修改 .env.dev 中的开发环境参数
-
-# 生产环境配置
-cp env.example .env.prod
-# 修改 .env.prod 中的生产环境参数
-
-# 使用特定配置启动
-docker compose --env-file .env.dev up -d
-```
-
-### API 概览
-
-- POST `/kb` 创建知识库
-- GET `/kb` 列出知识库
-- DELETE `/kb/{kb}` 删除知识库
-- POST `/kb/{kb}/upload` 多部分文件上传
-- POST `/kb/{kb}/git` JSON { repo_url, branch?, username?, token? }
-- POST `/chat` JSON { kb, question, top_k? }
-
-### 极简 Web UI
-
-打开 `http://localhost:8090/` 获取一个轻量级页面来尝试上传和提问。
-
-### 部署到云服务器
-
-项目已配置完整的云服务器部署方案，支持 Docker 容器化部署、Nginx 反向代理、SSL 证书等生产环境特性。
-
-#### 快速部署（推荐）
-
-我们提供了**部署配置文件包**，包含所有必需的配置文件，与Docker镜像分离管理：
-
-```bash
-# 1. 下载部署配置包
-# 上传 deploy-configs/ 目录到云服务器
-
-# 2. 进入部署目录
-cd deploy-configs
-
-# 3. 配置环境变量
-cp env.example .env
-nano .env  # 设置镜像地址等参数
-
-# 4. 一键部署
-chmod +x deploy.sh && ./deploy.sh
-```
-
-#### 部署配置文件包结构
-
-```
-deploy-configs/
-├── docker-compose.yml          # 服务编排配置
-├── docker-compose.prod.yml     # 生产环境优化
-├── .env                       # 环境变量（需自定义）
-├── nginx/                     # Nginx配置文件
-│   ├── nginx-http.conf       # HTTP配置
-│   ├── nginx-https.conf      # HTTPS配置
-│   ├── entrypoint.sh         # 启动脚本
-│   └── ssl/                  # SSL证书目录
-├── deploy.sh                 # 一键部署脚本
-└── QUICK_START.md           # 详细部署指南
-```
-
-#### 部署包特点
-
-- **分离管理**：配置文件与Docker镜像分离
-- **即拿即用**：包含所有必需的配置和脚本
-- **灵活配置**：支持HTTP/HTTPS一键切换
-- **生产优化**：内置性能优化和日志管理
-
-#### 详细部署指南
-
-请参考以下文档获取完整信息：
-
-- [DEPLOY.md](DEPLOY.md) - 完整的服务器环境准备和优化指南
-- [deploy-configs/QUICK_START.md](deploy-configs/QUICK_START.md) - 部署包使用指南
-
-#### 部署验证
-
-部署完成后，可以通过以下方式验证：
-
-```bash
-# 检查服务状态
-docker compose ps
-
-# 查看服务日志
-docker compose logs -f
-
-# 测试健康检查
-curl http://localhost/health
-```
-
-### 镜像打包和推送
-
-项目支持构建自定义 Docker 镜像并推送到镜像仓库：
-
-#### 镜像构建
-
-```bash
-# 1. 配置镜像信息（在 .env 文件中设置）
-DOCKER_REGISTRY=your-registry.com
-DOCKER_NAMESPACE=your-project
-DOCKER_IMAGE_NAME=ai-rag-app
-DOCKER_IMAGE_TAG=latest
-
-# 2. 构建镜像
-docker build -t ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} .
-
-# 3. 本地测试
-docker run -d -p 8090:8090 ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}
 curl http://localhost:8090/health
+# → {"ok":true,"model":"deepseek-r1:1.5b","ollama":"http://localhost:11434"}
 ```
 
-#### 镜像推送
+浏览器访问：
+
+- **API 文档**：`http://localhost:8090/docs`
+- **Web UI**：`http://localhost:8090/static/index.html`
+
+---
+
+## API 概览
+
+| 方法       | 路径                  | 说明          |
+| ---------- | --------------------- | ------------- |
+| `GET`    | `/health`           | 健康检查      |
+| `POST`   | `/kb`               | 创建知识库    |
+| `GET`    | `/kb`               | 列出知识库    |
+| `DELETE` | `/kb/{name}`        | 删除知识库    |
+| `POST`   | `/kb/{name}/upload` | 上传文件      |
+| `POST`   | `/kb/{name}/git`    | 导入 Git 仓库 |
+| `POST`   | `/chat`             | RAG 问答      |
+
+---
+
+## Docker 部署
+
+### 应用单独构建
 
 ```bash
-# 1. 登录镜像仓库
-docker login ${DOCKER_REGISTRY}
+# 构建镜像
+make docker-build
 
-# 2. 推送镜像
-docker push ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG}
+# 运行
+make docker-run
 
-# 3. 可选：推送版本标签
-docker tag ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${DOCKER_IMAGE_NAME}:${DOCKER_IMAGE_TAG} \
-           ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${DOCKER_IMAGE_NAME}:1.0.0
-docker push ${DOCKER_REGISTRY}/${DOCKER_NAMESPACE}/${DOCKER_IMAGE_NAME}:1.0.0
+# 或手动
+docker build -t ai-rag-app:latest .
+docker run -d --name ai-rag -p 8090:8090 ai-rag-app:latest
 ```
 
-#### 使用构建脚本（推荐）
+### 完整服务编排（应用 + Ollama + Nginx）
 
 ```bash
-# 快速构建和推送
-./quick-build.sh
-
-# 或完整构建流程（包含测试）
-./build-and-push.sh
+cd deploy-configs
+cp env.example .env    # 编辑配置
+docker compose up -d --build
 ```
+
+### 构建脚本
 
 ```bash
-# 查看服务状态
-docker compose -f docker-compose.prod.yml ps
+# 快速构建 + 推送
+./scripts/quick-build.sh
 
-# 查看日志
-docker compose -f docker-compose.prod.yml logs -f app
+# 完整构建流程（含测试）
+./scripts/build.sh
 ```
 
-#### 详细部署文档
+详细部署指南请参考：
 
-请参考 [DEPLOY.md](DEPLOY.md) 获取完整的部署指南，包括：
+- [部署文档](docs/deployment.md)
+- [部署配置说明](deploy-configs/QUICK_START.md)
 
-- 服务器准备和 Docker 安装
-- SSL 证书配置（Let's Encrypt / 自签名）
-- 防火墙配置
-- 生产环境优化
-- 故障排查
-- 监控和备份
+---
 
-#### 服务访问
+## 环境配置
 
-- **HTTP**: `http://your-server-ip`
-- **HTTPS**: `https://your-domain.com` (需配置 SSL)
-- **API 文档**: `http://your-server-ip/docs`
-- **健康检查**: `http://your-server-ip/health`
+核心配置项通过环境变量或 `.env` 文件管理：
 
-### 注意事项
+| 配置项              | 说明               | 默认值                     |
+| ------------------- | ------------------ | -------------------------- |
+| `OLLAMA_BASE_URL` | Ollama 服务地址    | `http://localhost:11434` |
+| `EMBEDDING_MODEL` | 文本嵌入模型       | `deepseek-r1:1.5b`       |
+| `CHAT_MODEL`      | 对话生成模型       | `deepseek-r1:1.5b`       |
+| `DATA_DIR`        | 数据存储目录       | `./data`                 |
+| `GIT_TIMEOUT`     | Git 操作超时（秒） | `300`                    |
 
-- Chroma 数据库持久化存储在 `data/vectorstore/<kb>`
-- 摄取支持常见文本/代码文件；根据需要扩展加载器
-- 对于私有 Git，在 URL 中使用令牌或提供 `username` + `token`
+部署环境配置（Docker 端口、SSL、镜像仓库等）请使用 `deploy-configs/.env`。
+
+---
+
+## 开发命令
+
+```bash
+make run          # 启动开发服务器（热重载）
+make test         # 运行测试
+make clean        # 清除 __pycache__
+make shell        # Python shell 快速载入包
+make docker-build # Docker 构建
+make docker-run   # Docker 运行
+```
+
+---
+
+## 演进路线
+
+| 阶段              | 内容                                            | 状态      |
+| ----------------- | ----------------------------------------------- | --------- |
+| **Phase 0** | 项目结构重构，代码整理                          | ✅ 完成   |
+| **Phase 1** | 脱框：移除 LangChain，手搓基础设施              | 📝 规划中 |
+| **Phase 2** | Agent 骨架：Tool System + Agent Loop + Memory   | 📝 规划中 |
+| **Phase 3** | 多源 Research Agent：规划 + 工具协作 + 报告生成 | 📝 规划中 |
+
+---
+
+## 注意事项
+
+- Chroma 向量数据库持久化在 `data/vectorstore/<kb_name>/`
+- 文件上传支持常见文本/代码格式，不支持二进制文件
+- 私有 Git 仓库使用 HTTPS + Token 认证
+- 本项目的 `infrastructure/` 和 `agent/` 模块为手搓实现，不依赖 LangChain

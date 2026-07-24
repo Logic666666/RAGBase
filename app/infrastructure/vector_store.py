@@ -11,7 +11,7 @@ from typing import List, Tuple
 from langchain_community.vectorstores import Chroma
 from langchain_ollama import OllamaEmbeddings
 
-from ..settings import Settings
+from ..core.config import Settings
 
 
 class VectorStore:

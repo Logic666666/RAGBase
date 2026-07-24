@@ -1,0 +1,33 @@
+[project]
+name = "ai-rag-knowledge"
+version = "0.2.0"
+description = "AI RAG Knowledge Base System — RAG + Agent 融合的知识管理与研究助手"
+authors = [{name = "Logic666666"}]
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "chromadb>=0.5.0",
+    "gitpython>=3.1.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    "jinja2>=3.1.0",
+]
+
+[project.readme]
+file = "docs/index.md"
+content-type = "text/markdown"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.setuptools.packages.find]
+include = ["app*"]

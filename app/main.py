@@ -5,7 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional
 
-from .settings import get_settings, Settings
+from .core.config import get_settings, Settings
 from .services.kb import KnowledgeBaseService
 from .services.rag import RagService
 

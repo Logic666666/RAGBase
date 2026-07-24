@@ -4,9 +4,9 @@ from typing import List, Iterable
 
 from fastapi import UploadFile
 
-from ..settings import Settings
-from .vectorstore import VectorStore
-from ..utils.chunking import chunk_texts
+from ..core.config import Settings
+from ..infrastructure.vector_store import VectorStore
+from ..infrastructure.text_splitter import chunk_texts
 
 
 # 支持的文件扩展名集合，用于验证上传文件类型
