@@ -1,50 +1,68 @@
-## AI RAG 知识库系统 (FastAPI + LangChain + Ollama DeepSeek)
+# AI RAG Knowledge — RAG + Agent 知识管理与研究助手
 
-一个生产就绪、可云端部署的 RAG 服务：
+一个从 RAG 知识库向自主 Agent 架构演进的工程化项目。
 
-- 模型分离：独立配置嵌入模型(Embedding)和对话模型(Chat)
-- 后端：FastAPI
-- 嵌入模型：通过 `langchain-ollama` 使用 Ollama (DeepSeek) 生成向量
-- 对话模型：独立配置的 Ollama 模型用于高质量回答生成
-- 向量数据库：Chroma 持久化存储
-- 数据摄取：上传文本文件或解析 Git 仓库
-- RAG 聊天：基于选定知识库的检索增强生成
+后端采用 **FastAPI**，基础设施全部手搓（不依赖 LangChain），
+直接对接 **Ollama API**（LLM 对话 + 文本嵌入），
+使用 **ChromaDB** 做向量存储。
+
+### 项目定位
+
+- 🧱 **手搓基础设施**：LLM 客户端、Embedding 客户端、向量存储、文本分块全部自实现
+- 🧩 **模块化架构**：基础设施层、Agent 核心、工具系统、业务服务清晰分层
+- 🔧 **工程化导向**：类型安全、可测试、可观测、配置驱动
 
 ### 功能特性
 
-- 创建/列出/删除知识库 (KB)
-- 上传文件 (`.txt,.md,.py,.java,.sql,.csv,.json`)
-- Git 仓库摄取 (HTTPS + 可选令牌)
-- 使用 `RecursiveCharacterTextSplitter` 进行文本分块
-- 通过 Ollama 使用 DeepSeek 进行上下文查询
-- 本地测试的极简网页界面
+#### 当前（RAG 阶段）
 
-### 快速开始 (本地)
+- 创建 / 列出 / 删除知识库
+- 文件上传（`.txt`、`.md`、`.py`、`.java`、`.sql`、`.csv`、`.json`）
+- Git 仓库摄取（HTTPS + 可选令牌认证）
+- 智能文本分块（中英文混合优化）
+- 向量检索增强生成（RAG 问答）
+- 来源引用追踪
 
-1) 安装 Ollama：访问 `https://ollama.com/download`
-2) 拉取模型（可自行选择）：
+#### 规划中（Agent 阶段）
+
+- ReAct Agent 循环（推理 → 行动 → 观察）
+- 可插拔工具系统（Tool Registry + BaseTool）
+- 分层记忆系统（短期 / 长期 / 工作记忆）
+- 任务规划模块（Plan-and-Solve）
+- 多源 Research Agent + 结构化报告
+
+### 快速开始（本地开发）
+
+#### 前置条件
+
+1. **安装 Ollama**：[https://ollama.com/download](https://ollama.com/download)
+2. **拉取模型**（可根据需要选择）：
 
 ```bash
-# 拉取嵌入模型
-bge-m3
-# 拉取对话模型
-ollama pull deepseek-r1:1.5b
+ollama pull bge-m3            # 嵌入模型
+ollama pull deepseek-r1:1.5b  # 对话模型
 ```
 
-3) Python 环境
+#### venv + pip
 
 ```bash
 python -m venv .venv && .venv/Scripts/activate
-pip install -r requirements.txt
-```
-
-4) 运行 API
-
-```bash
+#或者 conda create -n ai-agent python=3.11 -y
+pip install -e ".[dev]"
 uvicorn app.main:app --host 0.0.0.0 --port 8090 --reload
 ```
 
-5) 打开文档：`http://localhost:8090/docs`
+#### 验证
+
+```bash
+curl http://localhost:8090/health
+# → {"ok":true,"model":"deepseek-r1:1.5b","ollama":"http://localhost:11434"}
+```
+
+浏览器访问：
+
+- **API 文档**：`http://localhost:8090/docs`
+- **Web UI**：`http://localhost:8090/static/index.html`
 
 ### Docker (应用 + Ollama)
 

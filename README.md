@@ -157,12 +157,16 @@ ollama pull deepseek-r1:1.5b  # 对话模型
 
 ### 安装与运行
 
+#### venv + pip
+
 ```bash
 # 1. 创建虚拟环境
 python -m venv .venv && .venv/Scripts/activate
+# 或者 conda 创建虚拟环境
+conda create -n ai-agent python=3.11 -y
 
-# 2. 安装依赖
-pip install -r requirements.txt
+# 2. 从 pyproject.toml 安装依赖
+pip install -e ".[dev]"
 
 # 3. 启动服务
 uvicorn app.main:app --host 0.0.0.0 --port 8090 --reload

@@ -10,4 +10,6 @@ build/
 node_modules/
 .DS_Store
 **/.ipynb_checkpoints
-
+*.egg-info/
+计划.md
+技术栈.md
