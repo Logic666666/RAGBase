@@ -1,12 +1,6 @@
 # AI RAG Knowledge — RAG + Agent 知识管理与研究助手
 
-> 从 RAG 知识库向自主 Agent 架构演进的工程化项目
-
----
-
-## 项目定位
-
-一个**模块化、可扩展**的知识管理与研究系统。当前基于 RAG（Retrieval-Augmented Generation）实现知识库问答，正在逐步演进为**多源 Research Agent**，支持自主规划、多工具协作和结构化报告生成。
+模块化、可扩展的知识管理与研究系统。当前基于 RAG（Retrieval-Augmented Generation）实现知识库问答，基础设施全部手搓，直接对接 Ollama API。
 
 核心设计原则：
 
@@ -21,31 +15,33 @@
 ```
 ai-rag-knowledge/
 │
-├── app/                                   # ★ 核心应用包
+├── app/                                   # 核心应用包
 │   ├── __init__.py
-│   ├── main.py                            # FastAPI 入口
+│   ├── main.py                            # FastAPI 入口 + 路由
 │   │
-│   ├── api/                               # API 层
-│   │   └── __init__.py                    # （后续拆分路由和 schema）
+│   ├── api/                               # API 层（路由和 schema）
+│   │   └── __init__.py
 │   │
 │   ├── core/                              # 核心配置
 │   │   ├── __init__.py
 │   │   └── config.py                      # Settings + 依赖注入
 │   │
-│   ├── infrastructure/                    # ★ 基础设施层（手搓目标）
+│   ├── infrastructure/                    # 基础设施层（手搓）
 │   │   ├── __init__.py
-│   │   ├── vector_store.py                # 向量数据库封装（Chroma）
-│   │   └── text_splitter.py               # 文本分块策略
+│   │   ├── embeddings.py                  # Ollama Embedding 客户端
+│   │   ├── llm_client.py                  # Ollama Chat 客户端
+│   │   ├── text_splitter.py               # 递归文本分块
+│   │   └── vector_store.py                # ChromaDB 向量存储
 │   │
 │   ├── services/                          # 业务服务层
 │   │   ├── __init__.py
-│   │   ├── kb.py                          # 知识库管理（创建/文件/Git 导入）
+│   │   ├── kb.py                          # 知识库管理（文件/Git 导入）
 │   │   └── rag.py                         # RAG 问答管线
 │   │
-│   ├── agent/                             # ★ Agent 核心（规划中）
+│   ├── agent/                             # Agent 核心（Phase 2）
 │   │   └── __init__.py
 │   │
-│   ├── tools/                             # ★ 工具系统（规划中）
+│   ├── tools/                             # 工具系统（Phase 2）
 │   │   ├── __init__.py
 │   │   └── builtin/
 │   │       └── __init__.py
@@ -53,45 +49,25 @@ ai-rag-knowledge/
 │   └── utils/                             # 通用工具
 │       └── __init__.py
 │
-├── tests/                                 # ★ 测试（新增）
+├── tests/                                 # 测试
 │   ├── __init__.py
-│   ├── unit/                              # 单元测试
-│   └── integration/                       # 集成测试
+│   ├── conftest.py                        # 共享 fixture
+│   ├── unit/                              # 单元测试（14 tests）
+│   └── integration/                       # 集成测试（12 tests）
 │
-├── docs/                                  # ★ 文档集中管理
-│   ├── index.md                           # 项目总览（原 README 迁移）
-│   ├── deployment.md                      # 部署指南（原 DEPLOY.md 迁移）
-│   └── tech-stack.md                      # 技术栈分析（原技术栈.md 迁移）
-│
-├── scripts/                               # ★ 构建脚本
-│   ├── build.sh                           # Docker 构建 + 推送（原 build-and-push.sh）
-│   └── quick-build.sh                     # 快速构建
+├── docs/                                  # 文档
+│   ├── index.md                           # 项目总览
+│   ├── deployment.md                      # 部署指南
+│   └── tech-stack.md                      # 技术栈分析
 │
 ├── deploy-configs/                        # 云部署配置
-│   ├── docker-compose.yml
-│   ├── docker-compose.prod.yml
-│   ├── .env                               # 部署环境变量
-│   ├── env.example
-│   ├── deploy.sh
-│   ├── nginx/
-│   │   ├── nginx-http.conf
-│   │   ├── nginx-https.conf
-│   │   ├── entrypoint.sh
-│   │   └── ssl/
-│   └── ...
-│
-├── static/
-│   └── index.html                         # 极简 Web UI
-│
+├── static/                                # Web UI
 ├── data/                                  # 运行时数据
-│   ├── kb/
-│   └── vectorstore/
 │
-├── pyproject.toml                         # ★ 项目元数据
-├── Makefile                               # ★ 常用命令入口
-├── requirements.txt
+├── pyproject.toml                         # 项目元数据 + 依赖
+├── environment.yml                        # Conda 环境定义
+├── Makefile                               # 常用命令
 ├── Dockerfile
-├── .gitignore
 └── README.md
 ```
 
@@ -100,7 +76,7 @@ ai-rag-knowledge/
 ```
 ┌───────────────────────────────────────────────────┐
 │                    API 层 (api/)                    │
-│  路由定义 · 请求/响应 Schema · 依赖注入             │
+│  路由定义 · 请求/响应 Schema · 依赖注入              │
 ├───────────────────────────────────────────────────┤
 │                业务服务层 (services/)                │
 │  知识库管理 · RAG 问答管线                          │
@@ -108,9 +84,9 @@ ai-rag-knowledge/
 │   Agent 核心      │     基础设施层                   │
 │   (agent/)        │   (infrastructure/)            │
 │                    │                                │
-│   · Agent Loop     │   · LLM 客户端（手搓）           │
+│   · Agent Loop     │   · LLM 客户端（手搓）          │
 │   · 记忆系统       │   · Embedding 客户端（手搓）     │
-│   · 规划模块       │   · 向量存储                    │
+│   · 规划模块       │   · 向量存储（ChromaDB）        │
 │                    │   · 文本分块                    │
 │  工具系统 (tools/) │                                │
 │   · 工具注册中心   │                                │
@@ -128,13 +104,14 @@ ai-rag-knowledge/
 - 创建 / 列出 / 删除知识库
 - 文件上传（`.txt` · `.md` · `.py` · `.java` · `.sql` · `.csv` · `.json`）
 - Git 仓库摄取（HTTPS + 可选令牌认证）
-- 智能文本分块（中英文混合优化）
-- 向量检索增强生成（RAG 问答）
-- 来源引用追踪
+- 智能文本分块（中英文混合优化，递归字符分割）
+- 向量检索增强生成（RAG 问答，来源引用追踪）
+- 基础设施全部手搓：LLM 客户端、Embedding 客户端、向量存储、文本分块
+- 完整的 async 异步支持
+- 26 项自动化测试覆盖
 
 ### 规划中（Agent 阶段）
 
-- 手搓 LLM / Embedding / VectorStore 基础设施
 - ReAct Agent 循环（推理 → 行动 → 观察）
 - 可插拔工具系统（Tool Registry + BaseTool）
 - 分层记忆系统（短期 / 长期 / 工作记忆）
@@ -143,36 +120,32 @@ ai-rag-knowledge/
 
 ---
 
-## 快速开始（本地开发）
+## 快速开始
 
 ### 前置条件
 
 1. **安装 Ollama**：[https://ollama.com/download](https://ollama.com/download)
-2. **拉取模型**（可根据需要选择）：
+2. **拉取模型**：
 
 ```bash
-ollama pull bge-m3          # 嵌入模型
+ollama pull bge-m3            # 嵌入模型
 ollama pull deepseek-r1:1.5b  # 对话模型
 ```
 
 ### 安装与运行
 
-#### venv + pip
-
 ```bash
-# 1. 创建虚拟环境
-python -m venv .venv && .venv/Scripts/activate
-# 或者 conda 创建虚拟环境
-conda create -n ai-agent python=3.11 -y
+# 方式一：Conda
+conda env create -f environment.yml
+conda activate ai-rag
 
-# 2. 从 pyproject.toml 安装依赖
+# 方式二：venv + pip
+python -m venv .venv && .venv/Scripts/activate
 pip install -e ".[dev]"
 
-# 3. 启动服务
+# 启动服务
 uvicorn app.main:app --host 0.0.0.0 --port 8090 --reload
-
-# 或使用 Makefile
-make run
+# 或 make run
 ```
 
 ### 验证
@@ -182,10 +155,15 @@ curl http://localhost:8090/health
 # → {"ok":true,"model":"deepseek-r1:1.5b","ollama":"http://localhost:11434"}
 ```
 
-浏览器访问：
-
 - **API 文档**：`http://localhost:8090/docs`
 - **Web UI**：`http://localhost:8090/static/index.html`
+
+### 运行测试
+
+```bash
+pytest tests/ -v            # 全部测试
+pytest tests/unit/ -v       # 只跑单元测试
+```
 
 ---
 
@@ -205,42 +183,18 @@ curl http://localhost:8090/health
 
 ## Docker 部署
 
-### 应用单独构建
-
 ```bash
-# 构建镜像
+# 应用单独构建
 make docker-build
-
-# 运行
 make docker-run
 
-# 或手动
-docker build -t ai-rag-app:latest .
-docker run -d --name ai-rag -p 8090:8090 ai-rag-app:latest
-```
-
-### 完整服务编排（应用 + Ollama + Nginx）
-
-```bash
+# 完整服务编排（应用 + Ollama + Nginx）
 cd deploy-configs
-cp env.example .env    # 编辑配置
+cp env.example .env
 docker compose up -d --build
 ```
 
-### 构建脚本
-
-```bash
-# 快速构建 + 推送
-./scripts/quick-build.sh
-
-# 完整构建流程（含测试）
-./scripts/build.sh
-```
-
-详细部署指南请参考：
-
-- [部署文档](docs/deployment.md)
-- [部署配置说明](deploy-configs/QUICK_START.md)
+详细部署指南请参考 [docs/deployment.md](docs/deployment.md) 和 [deploy-configs/QUICK_START.md](deploy-configs/QUICK_START.md)。
 
 ---
 
@@ -251,12 +205,10 @@ docker compose up -d --build
 | 配置项              | 说明               | 默认值                     |
 | ------------------- | ------------------ | -------------------------- |
 | `OLLAMA_BASE_URL` | Ollama 服务地址    | `http://localhost:11434` |
-| `EMBEDDING_MODEL` | 文本嵌入模型       | `deepseek-r1:1.5b`       |
-| `CHAT_MODEL`      | 对话生成模型       | `deepseek-r1:1.5b`       |
+| `EMBEDDING_MODEL` | 文本嵌入模型       | `bge-m3`                |
+| `CHAT_MODEL`      | 对话生成模型       | `deepseek-r1:1.5b`      |
 | `DATA_DIR`        | 数据存储目录       | `./data`                 |
 | `GIT_TIMEOUT`     | Git 操作超时（秒） | `300`                    |
-
-部署环境配置（Docker 端口、SSL、镜像仓库等）请使用 `deploy-configs/.env`。
 
 ---
 
@@ -264,23 +216,12 @@ docker compose up -d --build
 
 ```bash
 make run          # 启动开发服务器（热重载）
-make test         # 运行测试
+make test         # 运行所有测试
 make clean        # 清除 __pycache__
-make shell        # Python shell 快速载入包
+make shell        # Python shell 载入包
 make docker-build # Docker 构建
 make docker-run   # Docker 运行
 ```
-
----
-
-## 演进路线
-
-| 阶段              | 内容                                            | 状态      |
-| ----------------- | ----------------------------------------------- | --------- |
-| **Phase 0** | 项目结构重构，代码整理                          | ✅ 完成   |
-| **Phase 1** | 脱框：移除 LangChain，手搓基础设施              | 📝 规划中 |
-| **Phase 2** | Agent 骨架：Tool System + Agent Loop + Memory   | 📝 规划中 |
-| **Phase 3** | 多源 Research Agent：规划 + 工具协作 + 报告生成 | 📝 规划中 |
 
 ---
 
@@ -289,4 +230,4 @@ make docker-run   # Docker 运行
 - Chroma 向量数据库持久化在 `data/vectorstore/<kb_name>/`
 - 文件上传支持常见文本/代码格式，不支持二进制文件
 - 私有 Git 仓库使用 HTTPS + Token 认证
-- 本项目的 `infrastructure/` 和 `agent/` 模块为手搓实现，不依赖 LangChain
+- 本项目的 `infrastructure/` 模块为手搓实现，不依赖 LangChain

@@ -6,7 +6,7 @@ from fastapi import UploadFile
 
 from ..core.config import Settings
 from ..infrastructure.vector_store import VectorStore
-from ..infrastructure.text_splitter import chunk_texts
+from ..infrastructure.text_splitter import split_text
 
 
 # 支持的文件扩展名集合，用于验证上传文件类型
@@ -308,10 +308,10 @@ class KnowledgeBaseService:
 
         # 处理文档并添加到向量存储
         docs = self._collect_docs(saved_paths)
-        VectorStore(self.settings).add_documents(self.kb_vector_dir(name), docs)
+        await VectorStore(self.settings).add_documents(self.kb_vector_dir(name), docs)
         return len(docs)
 
-    def ingest_git_repo(self, name: str, repo_url: str, branch: str | None, username: str | None, token: str | None) -> int:
+    async def ingest_git_repo(self, name: str, repo_url: str, branch: str | None, username: str | None, token: str | None) -> int:
         """
         从Git仓库导入代码文件并构建知识库
 
@@ -500,7 +500,7 @@ class KnowledgeBaseService:
 
         # 处理文档并添加到向量存储
         docs = self._collect_docs(saved_paths)
-        VectorStore(self.settings).add_documents(self.kb_vector_dir(name), docs)
+        await VectorStore(self.settings).add_documents(self.kb_vector_dir(name), docs)
         return len(docs)
 
     # ------------------------------
@@ -527,7 +527,7 @@ class KnowledgeBaseService:
                     content = f.read()
                     
                 # 将文本分块并添加元数据
-                for chunk in chunk_texts(content):
+                for chunk in split_text(content):
                     texts.append(chunk)
                     metadatas.append({"source": p})
                     

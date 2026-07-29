@@ -93,14 +93,14 @@ async def upload_files(
 
 
 @app.post("/kb/{name}/git")
-def ingest_git(name: str, body: GitIngestBody, kb: KnowledgeBaseService = Depends(get_kb_service)):
-    count = kb.ingest_git_repo(name=name, repo_url=body.repo_url, branch=body.branch, username=body.username, token=body.token)
+async def ingest_git(name: str, body: GitIngestBody, kb: KnowledgeBaseService = Depends(get_kb_service)):
+    count = await kb.ingest_git_repo(name=name, repo_url=body.repo_url, branch=body.branch, username=body.username, token=body.token)
     return {"ingested_docs": count}
 
 
 @app.post("/chat")
-def chat(body: ChatBody, rag: RagService = Depends(get_rag_service)):
-    answer, sources = rag.answer_question(body.kb, body.question, body.top_k)
+async def chat(body: ChatBody, rag: RagService = Depends(get_rag_service)):
+    answer, sources = await rag.answer_question(body.kb, body.question, body.top_k)
     return {"answer": answer, "sources": sources}
 
 

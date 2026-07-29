@@ -1,195 +1,199 @@
 """
-向量存储服务模块
+向量存储模块
 
-该模块提供了基于Chroma向量数据库的文档存储和检索功能，
-使用Ollama提供的嵌入模型将文本转换为向量表示。
+基于 ChromaDB 原生 SDK 的文档向量化存储与相似性检索。
+不依赖 LangChain 的 Chroma。
+
+核心流程：
+  add_documents:     文本 → EmbeddingClient → 向量 → ChromaDB 存储
+  similarity_search: 查询 → EmbeddingClient → 向量 → ChromaDB 搜索 → 返回结果
+
+设计原则：
+  - 不在 ChromaDB 侧自动调用 embedding，而是客户端算好向量再传入
+  - 这样每个环节都可观测、可控制、可替换
 """
 
 import os
-from typing import List, Tuple
-
-from langchain_community.vectorstores import Chroma
-from langchain_ollama import OllamaEmbeddings
+import re
+import hashlib
+import chromadb
+from chromadb.config import Settings as ChromaSettings
+from chromadb.errors import NotFoundError
 
 from ..core.config import Settings
+from .embeddings import OllamaEmbeddingClient
 
 
 class VectorStore:
     """
-    向量存储服务类，负责文档的向量化存储和相似性检索
-    
-    该类封装了Chroma向量数据库的操作，提供了文档添加和检索功能，
-    使用Ollama的嵌入模型将文本转换为向量表示。
+    向量存储服务。
+
+    封装了 ChromaDB 的核心操作（增、查、删），
+    使用自实现的 OllamaEmbeddingClient 做文本向量化。
+
+    ChromaDB 支持传一个 embedding function 让它自动调。
+    但这样会"黑盒化" embedding 过程：
+    - 不知道 embedding 何时算的、算得对不对
+    - 没法加缓存（重复文本反复算）
+    - 没法在中间加日志或监控
+    - 换向量库时要重新配置 embedding
+
+    故选择"客户端算好再传"的模式。
     """
-    
+
     def __init__(self, settings: Settings) -> None:
-        """
-        初始化向量存储服务
-        
-        Args:
-            settings: 应用程序设置对象，包含Ollama服务地址和模型配置
-        """
         self.settings = settings
-
-    def _get_safe_collection_name(self, persist_dir: str) -> str:
-        """
-        生成符合ChromaDB规范的集合名称
-        
-        ChromaDB要求：
-        - 名称必须以字母或数字开头和结尾
-        - 只能包含 [a-zA-Z0-9._-] 字符
-        - 长度在 3-512 之间
-        
-        Args:
-            persist_dir: 向量数据库的持久化存储目录路径
-            
-        Returns:
-            符合ChromaDB规范的集合名称
-        """
-        import re
-        import hashlib
-        
-        dir_name = os.path.basename(persist_dir)
-        # 如果目录名包含非ASCII字符，使用哈希值
-        if not dir_name.isascii():
-            # 使用哈希值确保唯一性和安全性
-            hash_value = hashlib.md5(dir_name.encode('utf-8')).hexdigest()[:8]
-            safe_collection_name = f"kb_{hash_value}"
-        else:
-            # 移除非字母数字字符，但保留字母数字和下划线
-            safe_collection_name = re.sub(r'[^a-zA-Z0-9_]', '_', dir_name)
-            # 移除开头和结尾的下划线
-            safe_collection_name = safe_collection_name.strip('_')
-            # 如果处理后为空或太短，使用哈希值
-            if not safe_collection_name or len(safe_collection_name) < 2:
-                hash_value = hashlib.md5(dir_name.encode('utf-8')).hexdigest()[:8]
-                safe_collection_name = f"kb_{hash_value}"
-            else:
-                safe_collection_name = f"kb_{safe_collection_name}"
-        
-        # 确保名称以字母或数字开头和结尾（ChromaDB要求）
-        safe_collection_name = re.sub(r'^[^a-zA-Z0-9]+', '', safe_collection_name)
-        safe_collection_name = re.sub(r'[^a-zA-Z0-9]+$', '', safe_collection_name)
-        
-        # 确保名称长度符合要求（3-512字符）
-        if len(safe_collection_name) < 3:
-            hash_value = hashlib.md5(dir_name.encode('utf-8')).hexdigest()[:8]
-            safe_collection_name = f"kb{hash_value}"
-        elif len(safe_collection_name) > 512:
-            # 如果太长，截断并添加哈希值确保唯一性
-            hash_value = hashlib.md5(dir_name.encode('utf-8')).hexdigest()[:8]
-            safe_collection_name = safe_collection_name[:500] + hash_value
-        
-        return safe_collection_name
-
-    def _embeddings(self) -> OllamaEmbeddings:
-        """
-        创建Ollama嵌入模型实例（专门用于文本向量化）
-        
-        重要改进：现在可以独立配置嵌入模型，不受问答模型影响！
-        
-        嵌入模型配置说明：
-        - 基础URL：从settings.ollama_base_url获取，默认值为"http://localhost:11434"
-        - 模型名称：优先使用settings.embedding_model，后备使用settings.deepseek_model
-        - 配置值来自app.settings.Settings类，可通过环境变量设置：
-          * OLLAMA_BASE_URL：Ollama服务地址
-          * EMBEDDING_MODEL：嵌入模型名称（新配置项）
-          * DEEPSEEK_MODEL：后备兼容配置项
-        
-        模型切换说明：
-        现在可以独立配置嵌入模型，不受问答模型影响！您可以：
-        1. 下载专门的嵌入模型（推荐nomic-embed-text）
-        2. 设置EMBEDDING_MODEL环境变量
-        3. 保持问答模型使用其他模型（如deepseek-r1）
-        
-        专用嵌入模型推荐：
-        - nomic-embed-text：专门优化的文本嵌入模型，性能最佳
-        - mxbai-embed-large：多语言嵌入模型，支持中文
-        - snowflake-arctic-embed：高性能嵌入模型
-        
-        与问答模型的区别：
-        - 嵌入模型：专门将文本转换为向量（语义理解）
-        - 问答模型：用于对话生成和推理（文本生成）
-        - 两者可以独立配置，互不干扰！
-        
-        Returns:
-            配置好的OllamaEmbeddings实例，用于将文本转换为向量表示
-        """
-        # 优先使用新的embedding_model配置，如果没有则使用旧的deepseek_model作为后备
-        model_name = self.settings.embedding_model or self.settings.deepseek_model
-        return OllamaEmbeddings(
-            base_url=self.settings.ollama_base_url,
-            model=model_name,
+        self.embedding_client = OllamaEmbeddingClient(
+            base_url=settings.ollama_base_url,
+            model=settings.embedding_model,
         )
 
-    def add_documents(self, persist_dir: str, docs: List[Tuple[str, dict]]):
+
+    # 公开接口：添加文档
+    async def add_documents(
+        self, persist_dir: str, docs: list[tuple[str, dict]]
+    ) -> None:
         """
-        将文档添加到向量存储中
-        
-        处理流程：
-        1. 提取文本内容和元数据
-        2. 创建或加载Chroma向量数据库
-        3. 将文本和对应的元数据添加到数据库
-        4. 持久化存储到指定目录
-        
+        将文档添加到向量存储。
+
+        流程：
+        1. 分离文本和元数据
+        2. 用 EmbeddingClient 将文本转为向量 ← 自己做，不假手 Chroma
+        3. 用 ChromaDB 存储向量 + 原文 + 元数据
+
         Args:
-            persist_dir: 向量数据库的持久化存储目录路径
-            docs: 文档列表，每个文档是(文本内容, 元数据字典)的元组
+            persist_dir: ChromaDB 持久化目录
+            docs:        [(文本内容, 元数据字典), ...] 的列表
         """
         if not docs:
             return
-            
-        # 分离文本内容和元数据
-        texts = [t for t, _ in docs]
-        metas = [m for _, m in docs]
-        
-        # 创建Chroma向量存储实例
-        # Chroma会自动调用embedding_function将文本转换为向量
-        # 向量化过程：文本 -> 嵌入模型 -> 向量表示 -> 向量数据库存储
-        # 生成安全的集合名称（符合ChromaDB规范：必须以字母或数字开头和结尾）
-        safe_collection_name = self._get_safe_collection_name(persist_dir)
-        
-        vs = Chroma(
-            collection_name=safe_collection_name,
-            embedding_function=self._embeddings(),
-            persist_directory=persist_dir
-        )
-        
-        # 添加文本到向量存储
-        # Chroma会自动处理向量化：对每个文本调用嵌入模型生成向量，然后存储
-        vs.add_texts(texts=texts, metadatas=metas)
-        
-        # 持久化存储到磁盘
-        # 数据存储位置：persist_directory指定的目录
-        vs.persist()
 
-    def as_retriever(self, persist_dir: str, top_k: int):
+        texts, metadatas = zip(*docs)
+
+        # 核心：调 embedding
+        embeddings = await self.embedding_client.embed_documents(list(texts))
+
+        # 准备 ChromaDB 数据
+        collection = self._get_or_create_collection(persist_dir)
+        ids = [
+            f"doc_{i}_{hash(text)}"
+            for i, text in enumerate(texts)
+        ]
+
+        collection.add(
+            embeddings=embeddings,        # 算好的向量
+            documents=list(texts),        # 原文——ChromaDB 存一份方便查看
+            metadatas=list(metadatas),    # 元数据
+            ids=ids,
+        )
+
+    # 公开接口：相似度搜索
+    async def similarity_search(
+        self,
+        persist_dir: str,
+        query: str,
+        top_k: int = 4,
+    ) -> list[tuple[str, dict, float]]:
         """
-        创建向量检索器
-        
-        从持久化存储中加载向量数据库，并配置为检索器，
-        用于相似性搜索和文档检索。
-        
+        在向量存储中搜索与 query 语义相似的文档。
+
+        流程：
+        1. 把 query 转成向量
+        2. 用 ChromaDB 搜索最相似的 top_k 个向量
+        3. 返回 (原文, 元数据, 相似度分数)
+
         Args:
-            persist_dir: 向量数据库的持久化存储目录路径
-            top_k: 返回最相似的文档数量
-            
-        Returns:
-            配置好的向量检索器，可用于相似性搜索
-        """
-        # 加载已存在的向量存储
-        # Chroma会从persist_directory读取之前存储的向量数据
-        # 使用与add_documents相同的集合名称生成逻辑，确保能正确加载
-        safe_collection_name = self._get_safe_collection_name(persist_dir)
-        vs = Chroma(
-            collection_name=safe_collection_name,
-            embedding_function=self._embeddings(),
-            persist_directory=persist_dir
-        )
-        
-        # 配置检索器，设置返回结果数量
-        # 检索原理：将查询文本向量化，然后在向量空间中搜索相似文档
-        # 相似度计算：基于向量距离（如余弦相似度）
-        # 返回结果：按相似度排序的前top_k个文档
-        return vs.as_retriever(search_kwargs={"k": top_k})
+            persist_dir: ChromaDB 持久化目录
+            query:       查询文本
+            top_k:       返回前 N 条最相似的结果
 
+        Returns:
+            [(text, metadata, distance), ...]
+            distance 越小表示越相似（余弦距离）
+        """
+        # 计算 query 的向量
+        query_embedding = await self.embedding_client.embed_query(query)
+
+        collection = self._get_or_create_collection(persist_dir)
+
+        results = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=top_k,
+            include=["documents", "metadatas", "distances"],
+        )
+
+        # 整理结果
+        documents = results.get("documents", [[]])[0]
+        metadatas = results.get("metadatas", [[]])[0]
+        distances = results.get("distances", [[]])[0]
+
+        return list(zip(documents, metadatas, distances))
+
+    # 公开接口：删除集合
+    def delete_collection(self, persist_dir: str) -> None:
+        """删除整个向量集合（对应删除知识库时清理向量数据）"""
+        collection_name = self._safe_collection_name(persist_dir)
+        client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=ChromaSettings(anonymized_telemetry=False),
+        )
+        try:
+            client.delete_collection(collection_name)
+        except ValueError:
+            # 集合不存在时 ChromaDB 会抛 ValueError，忽略
+            pass
+
+
+    # 内部方法
+    def _get_or_create_collection(self, persist_dir: str):
+        """获取或创建 ChromaDB 集合"""
+        client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=ChromaSettings(anonymized_telemetry=False),
+        )
+        collection_name = self._safe_collection_name(persist_dir)
+
+        try:
+            return client.get_collection(name=collection_name)
+        except (ValueError, NotFoundError):
+            return client.create_collection(
+                name=collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
+
+    def _safe_collection_name(self, persist_dir: str) -> str:
+        """
+        生成符合 ChromaDB 规范的集合名称。
+
+        ChromaDB 要求：
+        - 字母或数字开头/结尾
+        - 只能包含 [a-zA-Z0-9._-]
+        - 长度 3-512 字符
+        """
+        dir_name = os.path.basename(persist_dir)
+
+        # 非 ASCII → 用哈希
+        if not dir_name.isascii():
+            hash_val = hashlib.md5(dir_name.encode()).hexdigest()[:8]
+            return f"kb_{hash_val}"
+
+        # 清理非法字符
+        safe = re.sub(r"[^a-zA-Z0-9_]", "_", dir_name).strip("_")
+        if not safe or len(safe) < 2:
+            hash_val = hashlib.md5(dir_name.encode()).hexdigest()[:8]
+            return f"kb_{hash_val}"
+
+        safe = f"kb_{safe}"
+
+        # 确保以字母/数字开头结尾
+        safe = re.sub(r"^[^a-zA-Z0-9]+", "", safe)
+        safe = re.sub(r"[^a-zA-Z0-9]+$", "", safe)
+
+        if len(safe) < 3:
+            hash_val = hashlib.md5(dir_name.encode()).hexdigest()[:8]
+            return f"kb{hash_val}"
+        if len(safe) > 512:
+            hash_val = hashlib.md5(dir_name.encode()).hexdigest()[:8]
+            safe = safe[:500] + hash_val
+
+        return safe
