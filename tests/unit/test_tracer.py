@@ -49,3 +49,27 @@ def test_summary_is_json_serializable():
     summary = tracer.summary()
     # 能序列化说明结构正确
     json.dumps(summary)
+
+
+def test_duration_ms_recorded():
+    """每条事件应有 duration_ms 字段"""
+    tracer = Tracer()
+    tracer.record("start", "任务开始")
+    tracer.record("tool_call", "search_kb")
+    tracer.record("tool_result", "结果")
+    tracer.record("final_answer", "回答")
+
+    for e in tracer.summary()["events"]:
+        assert "duration_ms" in e
+        assert isinstance(e["duration_ms"], (int, float))
+
+
+def test_total_duration_present():
+    """summary 应包含总耗时"""
+    tracer = Tracer()
+    tracer.record("start", "任务开始")
+    tracer.record("final_answer", "回答完毕")
+
+    summary = tracer.summary()
+    assert "total_duration_ms" in summary
+    assert summary["total_duration_ms"] >= 0

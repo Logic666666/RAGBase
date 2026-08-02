@@ -90,7 +90,9 @@ class Agent:
         for step in range(self.max_steps):
             # 2a. LLM 推理
             response = await self.llm.chat(messages)
-            self._trace("llm", f"step {step}: {response[:200]}")
+            # 记录 LLM 原始输出（不截断、不加前缀）：
+            # 前端需要从 llm 事件解析 thought 字段和工具调用 JSON
+            self._trace("llm", response)
 
             # 2b. 解析输出
             tool_call = parse_tool_call(response)
@@ -101,9 +103,10 @@ class Agent:
                 return AgentResult(answer=response, completed=True, steps=step + 1)
 
             # 2c. 执行工具
-            self._trace("tool_call", f"{tool_call.tool}({tool_call.arguments})")
+            # 记录工具名和参数（前端展示为工具调用行）
+            self._trace("tool_call", f"{tool_call.tool} {tool_call.arguments}")
             result = await self.tools.execute(tool_call.tool, tool_call.arguments)
-            self._trace("tool_result", f"{tool_call.tool}: {result[:200]}")
+            self._trace("tool_result", result)
 
             # 把 LLM 的工具调用和工具结果写回消息历史
             messages.append(Message(role="assistant", content=response))
