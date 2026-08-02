@@ -11,8 +11,6 @@
     # → [0.012, 0.345, ..., 0.789]  共 768 维
 """
 
-from typing import Optional
-
 import httpx
 
 
@@ -37,13 +35,13 @@ class OllamaEmbeddingClient:
         self,
         base_url: str,
         model: str,
-        timeout: int = 60,
+        timeout: int = 120,
     ):
         """
         Args:
             base_url: Ollama 服务地址（如 "http://localhost:11434"）
             model:    嵌入模型名称（如 "bge-m3"、"nomic-embed-text"）
-            timeout:  HTTP 请求超时秒数（embedding 模型通常很快，但大文档可能慢）
+            timeout:  HTTP 请求超时秒数（CPU 推理 embedding 较慢，给 2 分钟）
         """
         # 去掉尾部斜杠，方便拼接路径
         self.base_url = base_url.rstrip("/")

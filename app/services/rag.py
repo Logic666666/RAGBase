@@ -1,9 +1,13 @@
 """
-RAG（检索增强生成）问答服务
+RAG 问答服务
 
-核心流程：
-  用户提问 → 向量检索（VectorStore.similarity_search）→
-  构建上下文 → LLM 生成回答（OllamaChatClient.chat）→ 返回答案+来源
+提供两层 API：
+  1. search_docs()  — 共享检索方法，纯检索不做生成
+                      → 供 /chat 和 Agent 的 KnowledgeBaseTool 共同使用
+  2. answer_question() — 薄封装：检索 + 一轮 LLM 生成
+                      → 供 /chat 端点使用
+
+不维护两套检索逻辑，一个 search_docs 两个使用方。
 """
 
 import os
@@ -12,7 +16,7 @@ from ..core.config import Settings
 from ..infrastructure.vector_store import VectorStore
 from ..infrastructure.llm_client import OllamaChatClient, Message
 
-# 系统提示词
+
 SYS_PROMPT = (
     "You are a helpful assistant. Use the provided context to answer the question. "
     "Cite sources as file paths if relevant. If the answer is not in the context, say you don't know."
@@ -23,9 +27,15 @@ class RagService:
     """
     RAG 问答服务。
 
-    将基础设施层的组建组合成一条完整的问答管线：
-    1. VectorStore → 检索相关文档
-    2. OllamaChatClient → 基于检索结果生成回答
+    职责：
+    - search_docs：  在知识库中检索相关文档（纯检索，不做 LLM 生成）
+                      被 /chat 和 Agent KnowledgeBaseTool 共享
+    - answer_question：检索 + 一轮 LLM 生成（薄封装）
+                      仅供 /chat 端点使用
+
+    设计原则：
+    一个能力（检索）只有一个来源（search_docs），
+    不同的消费方（/chat、Agent）各自按需使用。
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -37,42 +47,68 @@ class RagService:
             temperature=0.2,
         )
 
-    def _kb_vector_dir(self, name: str) -> str:
-        """获取知识库的向量存储目录"""
-        return os.path.join(self.settings.data_dir, "vectorstore", name)
+    # ──────────────────────────────────────────
+    # 共享检索方法
+    # ──────────────────────────────────────────
+
+    async def search_docs(
+        self, kb: str, query: str, top_k: int = 4
+    ) -> list[dict]:
+        """
+        在知识库中检索与 query 相关的文档片段。
+
+        这是所有检索需求的统一入口：
+        - /chat 用：作为 answer_question 的第一步
+        - Agent 用：作为 KnowledgeBaseTool 的核心逻辑
+
+        返回结构化结果，而不是 LLM 生成的回答：
+        [{ "text": "文档片段", "source": "文件路径", "score": 0.95 }, ...]
+
+        Args:
+            kb:      知识库名称
+            query:   搜索关键词
+            top_k:   返回前 N 条最相关文档
+
+        Returns:
+            按相似度降序排列的文档列表
+        """
+        results = await self.vs.similarity_search(
+            self._kb_vector_dir(kb), query, top_k
+        )
+
+        # results = [(text, metadata, distance), ...]
+        return [
+            {
+                "text": text,
+                "source": meta.get("source", ""),
+                "score": 1 - dist,  # distance→similarity 转换
+            }
+            for text, meta, dist in results
+        ]
+
+    # ──────────────────────────────────────────
+    # RAG 问答封装
+    # ──────────────────────────────────────────
 
     async def answer_question(
         self, kb: str, question: str, top_k: int = 4
     ) -> tuple[str, list[dict]]:
         """
-        执行 RAG 问答。
+        单轮 RAG 问答：检索 → 构建上下文 → LLM 生成。
 
-        流程：
-        1. 向量检索：在知识库中搜索与问题最相关的文档块
-        2. 构建上下文：将检索结果格式化为 LLM 可读的上下文
-        3. LLM 生成：将上下文 + 问题发给模型，生成最终回答
-        4. 整理来源：返回答案和引用来源
-
-        参数：
-            kb:       知识库名称
-            question: 用户问题
-            top_k:    返回最相似文档数
+        这是 /chat 端点的后端逻辑。
+        不走 ReAct 循环，适合直接问答场景。
 
         返回：
             (answer_text, [{source, snippet}, ...])
         """
         # 1. 检索
-        results = await self.vs.similarity_search(
-            self._kb_vector_dir(kb),
-            question,
-            top_k,
-        )
+        docs = await self.search_docs(kb, question, top_k)
 
         # 2. 构建上下文
-        # results = [(text, metadata, distance), ...]
         context_parts = [
-            f"[{i+1}] ({meta.get('source', '')})\n{text}"
-            for i, (text, meta, _) in enumerate(results)
+            f"[{i+1}] ({d['source']})\n{d['text']}"
+            for i, d in enumerate(docs)
         ]
         context = "\n\n".join(context_parts)
 
@@ -88,8 +124,16 @@ class RagService:
 
         # 4. 整理来源
         sources = [
-            {"source": meta.get("source", ""), "snippet": text[:300]}
-            for text, meta, _ in results
+            {"source": d["source"], "snippet": d["text"][:300]}
+            for d in docs
         ]
 
         return answer, sources
+
+    # ──────────────────────────────────────────
+    # 内部方法
+    # ──────────────────────────────────────────
+
+    def _kb_vector_dir(self, name: str) -> str:
+        """获取知识库的向量存储目录"""
+        return os.path.join(self.settings.data_dir, "vectorstore", name)

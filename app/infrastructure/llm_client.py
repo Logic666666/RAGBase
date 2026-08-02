@@ -74,14 +74,16 @@ class OllamaChatClient:
         base_url: str,
         model: str,
         temperature: float = 0.2,
-        timeout: int = 120,
+        timeout: int = 300,
     ):
         """
         Args:
             base_url:    Ollama 服务地址（如 "http://localhost:11434"）
-            model:       对话模型名称（如 "deepseek-r1:1.5b"）
+            model:       对话模型名称（如 "qwen3:4b"）
             temperature: 生成温度（0~1，越低越确定，越高越随机）
-            timeout:     HTTP 请求超时秒数（LLM 生成通常几秒到几十秒，设充裕些）
+            timeout:     HTTP 请求超时秒数。
+                         CPU 推理大模型较慢（尤其是思考型模型），
+                         5 分钟（300 秒）较为充裕
         """
         self.base_url = base_url.rstrip("/")
         self.model = model

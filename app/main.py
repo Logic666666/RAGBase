@@ -8,6 +8,11 @@ from typing import List, Optional
 from .core.config import get_settings, Settings
 from .services.kb import KnowledgeBaseService
 from .services.rag import RagService
+from .agent.orchestrator import Agent
+from .tools.registry import ToolRegistry
+from .tools.builtin.knowledge_base import KnowledgeBaseTool
+from .infrastructure.llm_client import OllamaChatClient
+from .observability.tracer import Tracer
 
 
 app = FastAPI(title="AI RAG Knowledge", version="0.1.0")
@@ -46,6 +51,12 @@ class ChatBody(BaseModel):
     kb: str
     question: str
     top_k: int = 4
+
+
+class AgentRunBody(BaseModel):
+    kb: str
+    task: str
+    max_steps: int = 5
 
 
 def get_kb_service(settings: Settings = Depends(get_settings)):
@@ -102,5 +113,49 @@ async def ingest_git(name: str, body: GitIngestBody, kb: KnowledgeBaseService = 
 async def chat(body: ChatBody, rag: RagService = Depends(get_rag_service)):
     answer, sources = await rag.answer_question(body.kb, body.question, body.top_k)
     return {"answer": answer, "sources": sources}
+
+
+def build_agent(settings: Settings, kb: str) -> Agent:
+    """
+    构建 Agent 实例。
+
+    组装逻辑：
+      1. RagService（共享检索）
+      2. KnowledgeBaseTool（把检索包装为工具，固定知识库）
+      3. ToolRegistry（注册工具）
+      4. LLMClient（推理引擎）
+      5. Tracer（可观测）
+    """
+    rag = RagService(settings)
+    registry = ToolRegistry()
+    registry.register(KnowledgeBaseTool(rag, kb))
+
+    llm = OllamaChatClient(
+        base_url=settings.ollama_base_url,
+        model=settings.chat_model,
+        temperature=0.2,
+    )
+    return Agent(llm=llm, tools=registry, tracer=Tracer())
+
+
+@app.post("/agent/run")
+async def agent_run(body: AgentRunBody, settings: Settings = Depends(get_settings)):
+    """
+    提交任务给 Agent。
+
+    与 /chat 的区别：
+      - /chat: 单轮检索 + 单轮生成（快速直接）
+      - /agent/run: 多步推理循环，Agent 自主决定检索次数和策略
+        返回完整执行 Trace（可复盘）
+    """
+    agent = build_agent(settings, body.kb)
+    result = await agent.run(body.task)
+
+    return {
+        "answer": result.answer,
+        "completed": result.completed,
+        "steps": result.steps,
+        "trace": agent.tracer.summary() if agent.tracer else None,
+    }
 
 

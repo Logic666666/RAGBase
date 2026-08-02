@@ -300,6 +300,90 @@
     }
     .kb-empty svg { margin-bottom: 8px; opacity: .4; }
 
+    /* 模式切换（分段控件） */
+    .mode-switch {
+      display: inline-flex;
+      background: #f1f5f9;
+      border-radius: var(--radius);
+      padding: 3px;
+      gap: 2px;
+      margin-bottom: 14px;
+    }
+    .mode-btn {
+      padding: 7px 18px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: .82rem;
+      font-weight: 500;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: var(--transition);
+    }
+    .mode-btn:hover { color: var(--text); }
+    .mode-btn.active {
+      background: var(--surface);
+      color: var(--primary);
+      box-shadow: var(--shadow);
+      font-weight: 600;
+    }
+
+    /* Agent 思考过程展示 */
+    .trace-section {
+      margin-top: 16px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .trace-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: #fafbfc;
+      cursor: pointer;
+      font-size: .82rem;
+      color: var(--text-secondary);
+      user-select: none;
+    }
+    .trace-header:hover { background: #f1f5f9; }
+    .trace-body {
+      padding: 12px 16px;
+      display: none;
+      max-height: 320px;
+      overflow-y: auto;
+    }
+    .trace-body.open { display: block; }
+    .trace-step {
+      padding: 8px 0;
+      border-bottom: 1px dashed var(--border);
+      font-size: .8rem;
+      line-height: 1.6;
+    }
+    .trace-step:last-child { border-bottom: none; }
+    .trace-step-label {
+      font-weight: 600;
+      color: var(--primary);
+      margin-right: 6px;
+    }
+    .trace-step-tool {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: .75rem;
+      background: var(--primary-light);
+      color: var(--primary);
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin: 2px 0;
+    }
+    .trace-step-detail {
+      color: var(--text-secondary);
+      margin-top: 3px;
+      word-break: break-all;
+    }
+    .trace-step.answer { border-left: 3px solid var(--success); padding-left: 10px; }
+    .trace-step.error { border-left: 3px solid var(--error); padding-left: 10px; }
+
     /* 问答区域 */
     .chat-area { margin-top: 4px; }
 
@@ -497,9 +581,9 @@
   <main class="main">
     <div class="main-header">
       <div class="tabs">
-        <button class="tab-btn active" data-tab="ask" onclick="switchTab('ask')">💬 问答</button>
-        <button class="tab-btn" data-tab="upload" onclick="switchTab('upload')">📄 上传</button>
-        <button class="tab-btn" data-tab="git" onclick="switchTab('git')">📦 Git</button>
+        <button class="tab-btn active" data-tab="ask" onclick="switchTab('ask')">问答</button>
+        <button class="tab-btn" data-tab="upload" onclick="switchTab('upload')">上传</button>
+        <button class="tab-btn" data-tab="git" onclick="switchTab('git')">Git</button>
       </div>
       <div class="input-row" style="gap:8px;">
         <select id="kbSelect" style="width:auto;min-width:140px;font-size:.82rem;padding:7px 12px;">
@@ -515,6 +599,16 @@
       <div class="panel active" id="panel-ask">
         <div class="card">
           <div class="card-title">向知识库提问</div>
+
+          <!-- 模式切换 -->
+          <div class="mode-switch">
+            <button class="mode-btn active" data-mode="rag" onclick="switchMode('rag')">普通问答</button>
+            <button class="mode-btn" data-mode="agent" onclick="switchMode('agent')">Agent 模式</button>
+          </div>
+          <p id="modeHint" style="font-size:.78rem;color:var(--text-muted);margin-bottom:12px;">
+            单轮检索 + 生成，适合快速直接的问题。
+          </p>
+
           <form onsubmit="ask();return false">
             <div class="field">
               <textarea id="question" rows="4" placeholder="输入你的问题，AI 将基于选中的知识库内容给出答案…"></textarea>
@@ -524,6 +618,8 @@
                 <span style="font-size:.82rem;color:var(--text-secondary);">返回 top</span>
                 <input id="topk" type="number" value="4" min="1" max="15" style="width:65px;" />
                 <span style="font-size:.82rem;color:var(--text-secondary);">条结果</span>
+                <span id="maxStepsGroup" style="font-size:.82rem;color:var(--text-secondary);display:none;">· 最大步数</span>
+                <input id="maxSteps" type="number" value="5" min="1" max="10" style="width:65px;display:none;" />
               </div>
               <button class="btn btn-primary" id="askBtn" type="submit">
                 提问
@@ -543,10 +639,19 @@
             </div>
             <div id="answerLoading" class="answer-loading" style="display:none;">
               <div class="spinner"></div>
-              <span>AI 正在检索知识库并生成回答…</span>
+              <span id="loadingText">AI 正在检索知识库并生成回答…</span>
             </div>
             <div id="answerBody" class="answer-body" style="display:none;"></div>
             <div id="answerSources" class="sources" style="display:none;"></div>
+          </div>
+
+          <!-- Agent 思考过程（trace） -->
+          <div class="trace-section" id="traceSection" style="display:none;">
+            <div class="trace-header" onclick="toggleTrace()">
+              <span>思考过程（Agent 执行轨迹）</span>
+              <span id="traceToggleIcon">▼</span>
+            </div>
+            <div class="trace-body" id="traceBody"></div>
           </div>
         </div>
       </div>
@@ -618,8 +723,7 @@
     const container = document.getElementById('toastContainer');
     const el = document.createElement('div');
     el.className = `toast toast-${type}`;
-    const icons = { success: '✓', error: '✗', info: 'ℹ' };
-    el.innerHTML = `<span style="font-weight:700;flex-shrink:0;">${icons[type]||''}</span> ${message}`;
+    el.textContent = message;
     container.appendChild(el);
     setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity .3s'; }, 2800);
     setTimeout(() => el.remove(), 3200);
@@ -666,7 +770,9 @@
           <div class="kb-item${n === currentKb ? ' active' : ''}" onclick="selectKb('${n}')">
             <span class="kb-item-name">${n}</span>
             <div class="kb-item-actions">
-              <button class="kb-del-btn" onclick="event.stopPropagation();delKb('${n}')" title="删除">✕</button>
+              <button class="kb-del-btn" onclick="event.stopPropagation();delKb('${n}')" title="删除">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
             </div>
           </div>
         `).join('');
@@ -765,11 +871,14 @@
     try {
       const res = await fetch(`/kb/${kb}/upload`, { method: 'POST', body: fd });
       const j = await res.json();
-      resultDiv.querySelector('pre').textContent = JSON.stringify(j, null, 2);
       if (res.ok) {
-        toast(`成功导入 ${j.ingested || 0} 个文档块`, 'success');
+        const count = j.ingested || 0;
+        resultDiv.querySelector('pre').textContent =
+          `已成功处理 ${files.length} 个文件，共生成 ${count} 个文档片段，已加入知识库「${kb}」。`;
+        toast(`导入成功：${count} 个文档片段`, 'success');
         document.getElementById('files').value = '';
       } else {
+        resultDiv.querySelector('pre').textContent = j.detail || '上传失败';
         toast('上传失败', 'error');
       }
     } catch (e) {
@@ -807,15 +916,18 @@
         body: JSON.stringify(body),
       });
       const j = await res.json();
-      resultDiv.querySelector('pre').textContent = JSON.stringify(j, null, 2);
       if (res.ok) {
-        toast(`成功导入 ${j.ingested_docs || 0} 个文档块`, 'success');
+        const count = j.ingested_docs || 0;
+        resultDiv.querySelector('pre').textContent =
+          `仓库已导入，共生成 ${count} 个文档片段，已加入知识库「${kb}」。`;
+        toast(`导入成功：${count} 个文档片段`, 'success');
         document.getElementById('gitUrl').value = '';
         document.getElementById('gitBranch').value = '';
         document.getElementById('gitUser').value = '';
         document.getElementById('gitToken').value = '';
       } else {
-        toast(j.detail || '导入失败', 'error');
+        resultDiv.querySelector('pre').textContent = j.detail || '导入失败';
+        toast('导入失败', 'error');
       }
     } catch (e) {
       resultDiv.querySelector('pre').textContent = `错误: ${e.message}`;
@@ -825,7 +937,31 @@
   }
 
   // ====================================
-  // 问答
+  // 模式切换（普通问答 / Agent）
+  // ====================================
+  let currentMode = 'rag';
+
+  function switchMode(mode) {
+    currentMode = mode;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+
+    const hint = document.getElementById('modeHint');
+    const maxSteps = document.getElementById('maxSteps');
+    const maxStepsLabel = document.getElementById('maxStepsGroup');
+
+    if (mode === 'rag') {
+      hint.textContent = '单轮检索 + 生成，适合快速直接的问题。';
+      maxSteps.style.display = 'none';
+      maxStepsLabel.style.display = 'none';
+    } else {
+      hint.textContent = 'Agent 自主多步检索，适合需要对比、综合多份文档的问题。';
+      maxSteps.style.display = 'inline-block';
+      maxStepsLabel.style.display = 'inline';
+    }
+  }
+
+  // ====================================
+  // 问答（双模式）
   // ====================================
   async function ask() {
     const kb = document.getElementById('kbSelect').value;
@@ -835,39 +971,66 @@
 
     const placeholder = document.getElementById('answerPlaceholder');
     const loading = document.getElementById('answerLoading');
+    const loadingText = document.getElementById('loadingText');
     const body = document.getElementById('answerBody');
     const sources = document.getElementById('answerSources');
+    const traceSection = document.getElementById('traceSection');
+    const traceBody = document.getElementById('traceBody');
     const btn = document.getElementById('askBtn');
 
     placeholder.style.display = 'none';
     body.style.display = 'none';
     sources.style.display = 'none';
+    traceSection.style.display = 'none';
+    traceBody.innerHTML = '';
     loading.style.display = 'flex';
     btn.disabled = true;
     btn.textContent = '思考中…';
     setStatus('生成回答中…', 'loading');
 
+    // Agent 模式显示多步提示
+    loadingText.textContent = currentMode === 'agent'
+      ? 'Agent 正在思考：解析任务、检索知识库、综合回答…'
+      : 'AI 正在检索知识库并生成回答…';
+
     try {
-      const res = await fetch('/chat', {
+      // Agent 模式调 /agent/run，普通模式调 /chat
+      const url = currentMode === 'agent' ? '/agent/run' : '/chat';
+      const payload = currentMode === 'agent'
+        ? { kb, task: q, max_steps: parseInt(document.getElementById('maxSteps').value) || 5 }
+        : { kb, question: q, top_k: parseInt(document.getElementById('topk').value) || 4 };
+
+      const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          kb,
-          question: q,
-          top_k: parseInt(document.getElementById('topk').value) || 4,
-        }),
+        body: JSON.stringify(payload),
       });
       const j = await res.json();
 
       loading.style.display = 'none';
+
+      // Agent 模式：展示思考过程 trace
+      if (currentMode === 'agent' && j.trace) {
+        traceSection.style.display = 'block';
+        renderTrace(traceBody, j.trace.events || []);
+        if (!j.completed) {
+          toast('任务未完全完成（步数限制）', 'info');
+        }
+      }
+
       if (res.ok && j.answer) {
         body.style.display = 'block';
         body.innerHTML = marked.parse(j.answer);
 
-        if (j.sources && j.sources.length > 0) {
+        // Agent 模式从 trace 提取来源；普通模式用 j.sources
+        const srcs = currentMode === 'agent'
+          ? extractSourcesFromTrace(j.trace?.events || [])
+          : (j.sources || []);
+
+        if (srcs.length > 0) {
           sources.style.display = 'flex';
-          sources.innerHTML = `<span class="sources-label">📎 来源</span>` +
-            j.sources.map(s => `<span class="source-chip" title="${s.source}">${s.source}</span>`).join('');
+          sources.innerHTML = `<span class="sources-label">来源</span>` +
+            srcs.slice(0, 8).map(s => `<span class="source-chip" title="${s}">${s}</span>`).join('');
         }
         toast('回答完成', 'success');
       } else {
@@ -884,6 +1047,87 @@
     btn.disabled = false;
     btn.textContent = '提问';
     setStatus('就绪');
+  }
+
+  // ====================================
+  // Trace 渲染（Agent 思考过程）
+  // ====================================
+  function renderTrace(container, events) {
+    const labelMap = {
+      start: '任务开始',
+      llm: 'LLM 推理',
+      tool_call: '调用工具',
+      tool_result: '工具结果',
+      final_answer: '最终回答',
+      max_steps: '步数耗尽',
+      give_up: '主动放弃',
+    };
+
+    container.innerHTML = events.map(e => {
+      const label = labelMap[e.event] || e.event;
+      let cls = '';
+      if (e.event === 'final_answer') cls = 'answer';
+      if (e.event === 'give_up' || e.event === 'max_steps') cls = 'error';
+
+      // tool_call 时展示工具名 + 思考
+      if (e.event === 'tool_call') {
+        const detail = e.detail || '';
+        let toolInfo = detail;
+        // 尝试解析 detail 中的 JSON（thought/tool/arguments）
+        try {
+          const parsed = JSON.parse(detail);
+          toolInfo = `<span class="trace-step-tool">${parsed.tool || ''}</span> ` +
+            (parsed.thought ? `思考: ${esc(parsed.thought)}` : '');
+        } catch { /* 不是 JSON 就原样显示 */ }
+        return `<div class="trace-step ${cls}">
+          <span class="trace-step-label">Step ${e.step}</span>${label}
+          <div class="trace-step-detail">${toolInfo}</div>
+        </div>`;
+      }
+
+      // tool_result 时展示结果摘要
+      if (e.event === 'tool_result') {
+        const snippet = (e.detail || '').slice(0, 120);
+        return `<div class="trace-step ${cls}">
+          <span class="trace-step-label">Step ${e.step}</span>${label}
+          <div class="trace-step-detail">${esc(snippet)}${e.detail && e.detail.length > 120 ? '…' : ''}</div>
+        </div>`;
+      }
+
+      // 其他事件
+      return `<div class="trace-step ${cls}">
+        <span class="trace-step-label">${label}</span>
+        <div class="trace-step-detail">${esc((e.detail || '').slice(0, 200))}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function extractSourcesFromTrace(events) {
+    const sources = [];
+    for (const e of events) {
+      if (e.event === 'tool_result') {
+        // 从工具结果中提取 (xxx) 形式的来源路径
+        const matches = (e.detail || '').match(/\(([^)]+\.\w+)\)/g) || [];
+        for (const m of matches) {
+          const src = m.slice(1, -1);
+          if (src && !sources.includes(src)) sources.push(src);
+        }
+      }
+    }
+    return sources;
+  }
+
+  function toggleTrace() {
+    const bodyEl = document.getElementById('traceBody');
+    const icon = document.getElementById('traceToggleIcon');
+    bodyEl.classList.toggle('open');
+    icon.textContent = bodyEl.classList.contains('open') ? '▲' : '▼';
+  }
+
+  function esc(s) {
+    const div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
   }
 
   // ====================================
