@@ -53,9 +53,11 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
       - 文本是合法的 JSON 且包含 "tool" 字段 → 工具调用
       - 其他情况 → 返回 None（视为最终回答）
 
-    对格式错误的 JSON 宽容处理：
-      模型可能输出前后带杂文本的 JSON（如 ```json 包裹），
-      这里先做基础的清理再尝试解析。
+    对格式错误的 JSON 宽容处理（真实世界的 LLM 输出总是"脏"的）：
+      1. 模型可能用 ```json 代码块包裹 → 去掉包裹
+      2. 模型可能先输出一大段内心独白再附 JSON（关闭 think 模式后常见）
+         → 从混合文本中提取 {..} 子串再解析
+      3. 整体解析失败 → 尝试子串提取，仍失败才视为最终回答
 
     Args:
         text: LLM 输出的原始文本
@@ -74,20 +76,35 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
 
-    # 不是 JSON 对象 → 不是工具调用
-    if not (text.startswith("{") and text.endswith("}")):
-        return None
+    # 尝试 1：整段作为 JSON 解析
+    data = _parse_json(text)
+    if data and "tool" in data:
+        return _to_tool_call(data)
 
+    # 尝试 2：从混合文本中提取 {..} 子串
+    # 模型可能先输出思考/规划文本，最后附一个 JSON 工具调用
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        data = _parse_json(text[start:end + 1])
+        if data and "tool" in data:
+            return _to_tool_call(data)
+
+    # 都失败 → 视为最终回答
+    return None
+
+
+def _parse_json(text: str) -> dict | None:
+    """尝试解析 JSON，失败返回 None"""
     try:
         data = json.loads(text)
+        return data if isinstance(data, dict) else None
     except json.JSONDecodeError:
-        # JSON 解析失败 → 视为最终回答（可能有模型输出瑕疵）
         return None
 
-    # 必须有 "tool" 字段才是工具调用
-    if "tool" not in data:
-        return None
 
+def _to_tool_call(data: dict) -> ToolCall:
+    """把解析出的 dict 转为 ToolCall"""
     return ToolCall(
         tool=str(data["tool"]),
         arguments=data.get("arguments", {}) or {},

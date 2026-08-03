@@ -40,15 +40,26 @@ class ScriptedLLM:
     按脚本输出回复的 mock LLM。
 
     scripts: 每次调用按顺序返回对应文本。
+    同时实现 chat 与 chat_with_response（orchestrator 使用后者）。
     """
 
-    def __init__(self, scripts: list[str]):
+    def __init__(self, scripts: list[str], thinking: str = ""):
         self.scripts = scripts
         self.calls: list = []
+        self.thinking = thinking  # 可选的思考内容，验证 think 事件传递
 
     async def chat(self, messages):
         self.calls.append(messages)
         return self.scripts[min(len(self.calls) - 1, len(self.scripts) - 1)]
+
+    async def chat_with_response(self, messages):
+        from app.infrastructure.llm_client import ChatResponse
+        self.calls.append(messages)
+        idx = min(len(self.calls) - 1, len(self.scripts) - 1)
+        return ChatResponse(
+            content=self.scripts[idx],
+            thinking=self.thinking if idx == 0 else "",
+        )
 
 
 @pytest.fixture
@@ -110,6 +121,26 @@ async def test_max_steps_truncation(registry):
     assert result.completed is False
     assert result.steps == 3
     assert "最大步数" in result.answer
+
+
+@pytest.mark.asyncio
+async def test_think_event_recorded(registry):
+    """
+    模型的思考内容（ChatResponse.thinking）应记录为 trace 的 think 事件。
+    """
+    llm = ScriptedLLM(
+        ['{"tool": "search_kb", "arguments": {"query": "数据库"}}', "回答完毕。"],
+        thinking="我需要先分析一下任务",
+    )
+    from app.observability.tracer import Tracer
+    agent = Agent(llm=llm, tools=registry, max_steps=5, tracer=Tracer())
+    await agent.run("测试任务")
+
+    events = [e.event for e in agent.tracer.events]
+    assert "think" in events, f"缺少 think 事件: {events}"
+
+    think_event = next(e for e in agent.tracer.events if e.event == "think")
+    assert "我需要先分析一下任务" in think_event.detail
 
 
 @pytest.mark.asyncio

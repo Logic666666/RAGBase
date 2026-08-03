@@ -1,3 +1,6 @@
+from typing import Optional
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 import os
@@ -7,17 +10,33 @@ class Settings(BaseSettings):
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     
     # 嵌入模型配置（用于文本向量化）
-    embedding_model: str = os.getenv("EMBEDDING_MODEL", "deepseek-r1:1.5b")
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "bge-m3")
     
     # 问答模型配置（用于对话生成）
-    chat_model: str = os.getenv("CHAT_MODEL", "deepseek-r1:1.5b")
+    chat_model: str = os.getenv("CHAT_MODEL", "qwen3.5:2b")
     
     data_dir: str = os.getenv("DATA_DIR", "./data")
-    
+
+    # LLM 运行参数
+    # 思考模式：思考型模型（如 qwen3）是否输出 think 阶段
+    llm_think: bool = True if os.getenv("LLM_THINK", "true").lower() == "true" else False
+    # 单次生成的最大 token 数；None 或空值表示不限制
+    llm_max_tokens: Optional[int] = None
+
+    @field_validator("llm_max_tokens", mode="before")
+    @classmethod
+    def empty_max_tokens_to_none(cls, v):
+        """允许 .env 中留空（''）或写 'None'，统一转为 None"""
+        if v is None:
+            return None
+        if isinstance(v, str) and (v.strip() == "" or v.strip().lower() == "none"):
+            return None
+        return v
+
     # 网络超时配置（单位：秒）
     git_timeout: int = int(os.getenv("GIT_TIMEOUT", "300"))  # 默认5分钟
     git_connect_timeout: int = int(os.getenv("GIT_CONNECT_TIMEOUT", "30"))  # 默认30秒
-    
+
     # Git加速器配置
     git_accelerator_enabled: bool = os.getenv("GIT_ACCELERATOR_ENABLED", "true").lower() == "true"
     git_accelerator_priority: str = os.getenv("GIT_ACCELERATOR_PRIORITY", "ghproxy,fastgit,original")

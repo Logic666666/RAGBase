@@ -50,3 +50,26 @@ def test_tool_call_without_arguments():
     result = parse_tool_call('{"tool": "search_kb"}')
     assert result is not None
     assert result.arguments == {}
+
+
+def test_mixed_text_with_tool_call():
+    """
+    模型先输出独白再附 JSON（关闭 think 模式后的常见行为）
+    应从混合文本中提取出工具调用。
+    """
+    text = (
+        "好的，我现在需要回答用户关于权衡的问题。"
+        "首先我应该调用工具检索知识库。"
+        '{"thought": "先搜索", "tool": "search_kb", '
+        '"arguments": {"query": "手势识别 权衡"}}'
+    )
+    result = parse_tool_call(text)
+    assert result is not None
+    assert result.tool == "search_kb"
+    assert result.arguments == {"query": "手势识别 权衡"}
+
+
+def test_mixed_text_is_still_final_answer_without_json():
+    """混合文本但没有 JSON 工具调用 → 视为最终回答"""
+    text = "根据我的分析，这个项目使用了 MediaPipe 实现手势识别。"
+    assert parse_tool_call(text) is None

@@ -12,7 +12,7 @@
 
 from typing import Any
 
-from .base import BaseTool
+from .base import BaseTool, ToolResult
 
 
 class ToolRegistry:
@@ -65,7 +65,7 @@ class ToolRegistry:
         """按名称获取工具"""
         return self._tools.get(name)
 
-    async def execute(self, name: str, kwargs: dict[str, Any]) -> str:
+    async def execute(self, name: str, kwargs: dict[str, Any]) -> ToolResult:
         """
         执行指定的工具。
 
@@ -74,13 +74,13 @@ class ToolRegistry:
             kwargs: 工具参数（由 LLM 生成，所以参数的 schema 要准确）
 
         Returns:
-            工具执行的文本结果。
+            ToolResult——ok 标记成功/失败。
             工具不存在、参数不合法、执行出错时，
-            返回错误文本而不是抛异常——LLM 需要看到错误来调整策略。
+            返回结构化错误而不是抛异常——LLM 需要看到错误来调整策略。
         """
         tool = self._tools.get(name)
         if tool is None:
-            return (
+            return ToolResult.error(
                 f"工具 '{name}' 不存在。"
                 f"可用工具: {', '.join(self._tools.keys())}。"
             )

@@ -72,39 +72,45 @@ def test_schemas_contains_tool_info(registry):
 @pytest.mark.asyncio
 async def test_execute_valid_params(registry):
     result = await registry.execute("fake_tool", {"query": "hello", "top_k": 3})
-    assert result == "OK: hello x3"
+    assert result.ok is True
+    assert result.content == "OK: hello x3"
 
 
 @pytest.mark.asyncio
 async def test_execute_missing_required_param(registry):
     result = await registry.execute("fake_tool", {"top_k": 3})
-    assert "工具参数错误" in result
-    assert "query" in result
+    assert result.ok is False
+    assert "工具参数错误" in result.content
+    assert "query" in result.content
 
 
 @pytest.mark.asyncio
 async def test_execute_wrong_type(registry):
     result = await registry.execute("fake_tool", {"query": "hello", "top_k": "abc"})
-    assert "工具参数错误" in result
+    assert result.ok is False
+    assert "工具参数错误" in result.content
 
 
 @pytest.mark.asyncio
 async def test_execute_unknown_param(registry):
     """LLM 拼错参数名（qeruy）应被 additionalProperties 拦截"""
     result = await registry.execute("fake_tool", {"qeruy": "hello"})
-    assert "工具参数错误" in result
+    assert result.ok is False
+    assert "工具参数错误" in result.content
 
 
 @pytest.mark.asyncio
 async def test_execute_unknown_tool(registry):
-    """工具不存在时返回错误文本而非抛异常"""
+    """工具不存在时返回结构化错误而非抛异常"""
     result = await registry.execute("nonexistent", {})
-    assert "不存在" in result
+    assert result.ok is False
+    assert "不存在" in result.content
 
 
 @pytest.mark.asyncio
 async def test_execute_catches_runtime_error(registry):
-    """工具内部异常 → 转为错误文本（不崩溃）"""
+    """工具内部异常 → 转为结构化错误（不崩溃）"""
     result = await registry.execute("fake_tool", {"query": "boom"})
-    assert "工具执行失败" in result
-    assert "RuntimeError" in result
+    assert result.ok is False
+    assert "工具执行失败" in result.content
+    assert "RuntimeError" in result.content

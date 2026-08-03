@@ -20,8 +20,6 @@ Agent 循环（ReAct Orchestrator）
   - 每一步都可通过 Tracer 记录（可观测）
 """
 
-from typing import Optional
-
 from ..infrastructure.llm_client import Message, OllamaChatClient
 from ..tools.registry import ToolRegistry
 from .prompts import system_prompt
@@ -48,7 +46,7 @@ class Agent:
         Args:
             llm:             手搓的 LLM 客户端
             tools:           工具注册中心
-            tracer:          可观测记录器（Phase 2 提供简单版，可选）
+            tracer:          可观测记录器
             max_steps:       最大循环步数（防死循环，默认 5）
             max_parse_failures: 连续解析失败的容忍次数（默认 2）
         """
@@ -89,8 +87,17 @@ class Agent:
         # 2. 循环
         for step in range(self.max_steps):
             # 2a. LLM 推理
-            response = await self.llm.chat(messages)
-            # 记录 LLM 原始输出（不截断、不加前缀）：
+            chat_response = await self.llm.chat_with_response(messages)
+            response = chat_response.content
+
+            # 记录思考过程（模型推理内容）：
+            # Ollama 通过 message.thinking 或 <think> 标签返回，
+            # llm_client 已提取到 ChatResponse.thinking。
+            # 推理过程是评估 agent 质量的重要数据，必须保留在 trace 中。
+            if chat_response.thinking:
+                self._trace("think", chat_response.thinking)
+
+            # 记录 LLM 正文输出（不含 think 标签）：
             # 前端需要从 llm 事件解析 thought 字段和工具调用 JSON
             self._trace("llm", response)
 
@@ -106,25 +113,35 @@ class Agent:
             # 记录工具名和参数（前端展示为工具调用行）
             self._trace("tool_call", f"{tool_call.tool} {tool_call.arguments}")
             result = await self.tools.execute(tool_call.tool, tool_call.arguments)
-            self._trace("tool_result", result)
+            self._trace("tool_result", result.content)
 
             # 把 LLM 的工具调用和工具结果写回消息历史
+            # 成功/失败用不同前缀（对应 Claude Code 的 tool_result + is_error 标记），
+            # 模型能明确区分结果与错误
             messages.append(Message(role="assistant", content=response))
-            messages.append(
-                Message(
-                    role="user",
-                    content=f"[工具结果 {tool_call.tool}]\n{result}",
+            if result.ok:
+                messages.append(
+                    Message(
+                        role="user",
+                        content=f"[工具结果 {tool_call.tool}]\n{result.content}",
+                    )
                 )
-            )
+            else:
+                messages.append(
+                    Message(
+                        role="user",
+                        content=f"[工具错误 {tool_call.tool}]\n{result.content}",
+                    )
+                )
 
-            # 如果工具调用本身解析有问题（参数校验失败等），计数防止死循环
-            if result.startswith("工具参数错误") or result.startswith("工具不存在"):
+            # 工具调用失败（参数校验错误/工具不存在）→ 计数防止死循环
+            if not result.ok:
                 parse_failures += 1
                 if parse_failures >= self.max_parse_failures:
                     self._trace("give_up", "连续工具错误，终止循环")
                     return AgentResult(
                         answer="工具调用连续出错，任务未能完成。"
-                               f"最后一次错误: {result[:200]}",
+                               f"最后一次错误: {result.content[:200]}",
                         completed=False,
                         steps=step + 1,
                     )

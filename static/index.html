@@ -1193,20 +1193,26 @@
     let pendingTool = null; // 等下一个 tool_result 一起渲染（用它的耗时）
 
     for (const e of events || []) {
-      if (e.event === 'llm') {
-        // llm 事件如果是工具调用 JSON → 提取 thought 渲染为可展开块
-        try {
-          const parsed = JSON.parse(e.detail);
-          if (parsed && parsed.thought) {
-            html += `<div class="tl-thought" onclick="this.classList.toggle('open')">
-              <div class="tl-thought-header">
-                <span class="tl-thought-arrow">▶</span>
-                <span>Thought for ${formatDuration(e.duration_ms)}</span>
-              </div>
-              <div class="tl-thought-body">${esc(parsed.thought)}</div>
-            </div>`;
-          }
-        } catch { /* 最终回答轮的文本输出，跳过 */ }
+      if (e.event === 'think') {
+        // 模型推理过程（来自 Ollama message.thinking 或 <think> 标签）
+        // 渲染为可展开的 Thought 块，展示完整思考内容
+        if (e.detail) {
+          html += `<div class="tl-thought" onclick="this.classList.toggle('open')">
+            <div class="tl-thought-header">
+              <span class="tl-thought-arrow">▶</span>
+              <span>Thought for ${formatDuration(e.duration_ms)}</span>
+            </div>
+            <div class="tl-thought-body">${esc(e.detail)}</div>
+          </div>`;
+        }
+      } else if (e.event === 'llm') {
+        // llm 事件如果是工具调用 JSON → 提取 thought
+        // JSON 里的 thought 是模型调用工具前的简短说明，
+        // 以普通文本气泡展示在流程中间（与最终回答同格式），
+        const parsed = extractToolCallJson(e.detail);
+        if (parsed && parsed.thought) {
+          html += `<div class="tl-bubble">${marked.parse(parsed.thought)}</div>`;
+        }
       } else if (e.event === 'tool_call') {
         toolCount++;
         const [name, argsStr] = splitToolDetail(e.detail || '');
@@ -1292,6 +1298,24 @@
     const div = document.createElement('div');
     div.textContent = s;
     return div.innerHTML;
+  }
+
+  function extractToolCallJson(text) {
+    // 容错提取工具调用 JSON：先整体解析，失败则提取 {..} 子串
+    if (!text) return null;
+    try {
+      const d = JSON.parse(text);
+      if (d && d.tool) return d;
+    } catch { /* 继续尝试子串提取 */ }
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      try {
+        const d = JSON.parse(text.slice(start, end + 1));
+        if (d && d.tool) return d;
+      } catch { /* 提取失败 */ }
+    }
+    return null;
   }
 
   // ====================================

@@ -3,6 +3,7 @@
 
 定义了工具系统的最小接口：
   - ToolSpec：工具的"身份证"（名字、描述、参数 schema）
+  - ToolResult：工具执行的结构化结果（成功/错误标记）
   - BaseTool：所有工具必须继承的抽象类
 
 一个工具 = 一个 spec（告诉 LLM 我能干什么）
@@ -11,14 +12,47 @@
 参数校验与异常兜底：
   BaseTool.execute() 是统一执行入口：
     1. 用 jsonschema 校验 LLM 传入的参数（LLM 输出不可信）
-    2. 捕获 run() 的异常并转为错误文本
-  这样 orchestrator 永远有东西可喂给 LLM——要么结果，要么错误信息。
+    2. 捕获 run() 的异常并转为结构化错误
+
+设计参考（Claude Code）：
+  Claude Code 用 tool_result + is_error 标记结构化返回错误，
+  程序用字段判断而非解析文本。这里用 ToolResult.ok 承担同样职责。
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any
 
 import jsonschema
+
+
+@dataclass
+class ToolResult:
+    """
+    工具执行的结构化结果。
+
+    对应 Claude Code 的 tool_result 块（带 is_error 标记）：
+      - ok=True  → 执行成功，content 是结果文本
+      - ok=False → 执行失败（参数校验失败/内部异常），content 是错误信息
+
+    设计要点：
+      orchestrator 用 result.ok 判断成功/失败（字段判断），
+      而不是 startswith("工具参数错误") 之类的字符串嗅探。
+    """
+    ok: bool
+    content: str
+
+    @classmethod
+    def success(cls, content: str) -> "ToolResult":
+        return cls(ok=True, content=content)
+
+    @classmethod
+    def error(cls, message: str) -> "ToolResult":
+        return cls(ok=False, content=message)
+
+    def to_message(self) -> str:
+        """转成喂给 LLM 的文本内容"""
+        return self.content
 
 
 class ToolSpec:
@@ -97,29 +131,32 @@ class BaseTool(ABC):
     # 统一执行入口（模板方法）
     # ──────────────────────────────────────────
 
-    async def execute(self, kwargs: dict) -> str:
+    async def execute(self, kwargs: dict) -> ToolResult:
         """
         统一的工具执行入口——orchestrator 只调这个方法。
 
         流程：
         1. 用 jsonschema 校验参数（LLM 生成的参数不可信）
         2. 调用子类的 run() 真正执行
-        3. 捕获所有异常，转为错误文本返回
+        3. 捕获所有异常，转为结构化错误
 
         保证：这个方法永不抛异常。
-        要么返回结果文本，要么返回错误文本——
-        两者对 LLM 来说都是合法的"观察结果"。
+        返回 ToolResult——用 ok 字段区分成功/失败，
+        对应 Claude Code 的 tool_result + is_error 标记。
         """
         # 1. 参数校验
         error = self._validate_params(kwargs)
         if error:
-            return f"工具参数错误: {error}。请检查参数后重试。"
+            return ToolResult.error(
+                f"工具参数错误: {error}。请检查参数后重试。"
+            )
 
         # 2. 执行 + 异常兜底
         try:
-            return await self.run(**kwargs)
+            content = await self.run(**kwargs)
+            return ToolResult.success(content)
         except Exception as e:
-            return (
+            return ToolResult.error(
                 f"工具执行失败: {type(e).__name__}: {str(e)}。"
                 f"请调整策略后重试。"
             )

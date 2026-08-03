@@ -45,6 +45,8 @@ class RagService:
             base_url=settings.ollama_base_url,
             model=settings.chat_model,
             temperature=0.2,
+            think=settings.llm_think,
+            max_tokens=settings.llm_max_tokens,
         )
 
     # ──────────────────────────────────────────

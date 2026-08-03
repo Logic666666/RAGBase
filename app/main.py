@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File
 from fastapi import Depends
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -134,6 +134,8 @@ def build_agent(settings: Settings, kb: str) -> Agent:
         base_url=settings.ollama_base_url,
         model=settings.chat_model,
         temperature=0.2,
+        think=settings.llm_think,
+        max_tokens=settings.llm_max_tokens,
     )
     return Agent(llm=llm, tools=registry, tracer=Tracer())
 
