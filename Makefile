@@ -1,8 +1,9 @@
 .PHONY: run test clean shell
 
 # 开发运行
+# --reload-dir 限定监听代码目录，避免 data/ 下导入文件触发重载中断请求
 run:
-	uvicorn app.main:app --reload --host 0.0.0.0 --port 8090
+	uvicorn app.main:app --reload --host 0.0.0.0 --port 8090 --reload-dir app --reload-dir static
 
 # 运行测试
 test:

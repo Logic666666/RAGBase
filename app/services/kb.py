@@ -378,36 +378,30 @@ class KnowledgeBaseService:
         if username and token and repo_url.startswith("https://") and "@" not in repo_url:
             url = repo_url.replace("https://", f"https://{username}:{token}@")
             
-        # 添加Git加速服务支持 - 多代理自动切换
-        import sys  # 确保sys模块可用
-        use_accelerator = True  # 可配置为设置项
-        # 加速服务列表，按优先级排序
-        accelerator_urls = [
-            "https://ghproxy.com/",
-            "https://mirror.ghproxy.com/",
-            "https://github.moeyy.xyz/"
-        ]
-        
-        if use_accelerator and repo_url.startswith("https://github.com"):
+        # Git 加速：域名替换模式（镜像列表从配置读取，可自定义）
+        # 将 https://github.com/user/repo 替换为 https://<镜像>/user/repo
+        if self.settings.git_accelerator_enabled and url.startswith("https://github.com"):
             original_host = "https://github.com"
-            # 尝试所有加速服务，直到找到可用的
-            for i, accelerator_url in enumerate(accelerator_urls):
-                try:
-                    accelerated_url = url.replace(original_host, accelerator_url + original_host)
-                    print(f"[INFO] 尝试Git加速服务 ({i+1}/{len(accelerator_urls)}): {accelerated_url}", file=sys.stderr)
-                    
-                    # 测试加速服务连通性
-                    import requests
-                    timeout = 10  # 10秒超时
-                    test_url = f"{accelerator_url}{original_host}"
-                    response = requests.head(test_url, timeout=timeout)
-                    if response.status_code in [200, 301, 302]:
-                        url = accelerated_url
-                        print(f"[INFO] 成功使用Git加速服务: {accelerator_url}", file=sys.stderr)
-                        break
-                except:
-                    if i == len(accelerator_urls) - 1:  # 最后一个也失败
-                        print(f"[WARNING] 所有Git加速服务均不可用，使用原始URL", file=sys.stderr)
+            for spec in self.settings.git_accelerators.split(","):
+                parts = spec.strip().split("|")
+                # 仅支持 replace 模式；跳过格式错误的条目
+                if len(parts) != 2 or parts[0].strip() != "replace":
+                    logging.warning(f"忽略无效的Git加速配置: {spec}")
+                    continue
+                mirror = parts[1].strip().rstrip("/")
+                if not mirror:
+                    continue
+
+                accelerated_url = url.replace(original_host, mirror)
+                print(f"[INFO] 尝试Git加速镜像: {mirror}")
+
+                # 用 git ls-remote 真实探活（比 HTTP HEAD 可靠且更快）
+                if self._test_git_connection(accelerated_url):
+                    url = accelerated_url
+                    print(f"[INFO] 成功使用Git加速镜像: {mirror}")
+                    break
+            else:
+                print("[WARNING] 所有Git加速镜像均不可用，使用原始URL")
 
         # 克隆Git仓库（支持重试、超时和错误处理）
         max_clone_retries = 5  # 增加重试次数
@@ -467,7 +461,7 @@ class KnowledgeBaseService:
             except Exception as e:
                 error_msg = str(e)
                 logging.error(f"Git克隆过程中发生未知错误 (尝试 {attempt + 1}/{max_clone_retries}): {error_msg}")
-                
+
                 if attempt == max_clone_retries - 1:
                     shutil.rmtree(tmp_dir, ignore_errors=True)
                     from fastapi import HTTPException
@@ -475,8 +469,8 @@ class KnowledgeBaseService:
                         status_code=500,
                         detail=f"Git克隆过程发生未知错误: {error_msg}"
                     )
-                
-                time.sleep(retry_delay * (attempt + 1))
+
+                time.sleep(initial_retry_delay * (attempt + 1))
 
         # 复制支持的文件到知识库源目录
         saved_paths: List[str] = []

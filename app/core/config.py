@@ -37,9 +37,18 @@ class Settings(BaseSettings):
     git_timeout: int = int(os.getenv("GIT_TIMEOUT", "300"))  # 默认5分钟
     git_connect_timeout: int = int(os.getenv("GIT_CONNECT_TIMEOUT", "30"))  # 默认30秒
 
-    # Git加速器配置
+    # Git 加速器配置
+    # 开关：是否启用 GitHub 镜像加速
     git_accelerator_enabled: bool = os.getenv("GIT_ACCELERATOR_ENABLED", "true").lower() == "true"
-    git_accelerator_priority: str = os.getenv("GIT_ACCELERATOR_PRIORITY", "ghproxy,fastgit,original")
+    # 加速镜像列表（域名替换模式），逗号分隔，按优先级从前到后尝试：
+    #   replace|https://bgithub.xyz,replace|https://kkgithub.com,replace|https://github.akams.cn
+    # 含义：把 https://github.com/xxx 替换为 https://<镜像域名>/xxx
+    git_accelerators: str = os.getenv(
+        "GIT_ACCELERATORS",
+        "replace|https://bgithub.xyz,"
+        "replace|https://kkgithub.com,"
+        "replace|https://github.akams.cn",
+    )
 
     class Config:
         env_file = ".env"

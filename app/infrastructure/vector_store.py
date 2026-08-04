@@ -74,9 +74,12 @@ class VectorStore:
         embeddings = await self.embedding_client.embed_documents(list(texts))
 
         # 准备 ChromaDB 数据
+        # ID 用确定性哈希（md5）而非内置 hash()：
+        # hash() 带进程级随机盐（PYTHONHASHSEED），跨进程/重启不稳定，
+        # 中断重导时会导致 ID 冲突或重复。
         collection = self._get_or_create_collection(persist_dir)
         ids = [
-            f"doc_{i}_{hash(text)}"
+            f"doc_{i}_{hashlib.md5(text.encode('utf-8')).hexdigest()[:12]}"
             for i, text in enumerate(texts)
         ]
 

@@ -157,7 +157,7 @@ ollama pull qwen3:2b          # 对话模型（按机器性能选择）
 ```bash
 # 方式一：Conda + pip
 conda create -n ai-agent python=3.11 -y 
-conda activate ai-rag
+conda activate ai-agent
 pip install -e ".[dev]"
 
 # 方式二：venv + pip
@@ -167,8 +167,8 @@ pip install -e ".[dev]"
 # 配置本地 .env（模型、Ollama 地址等）
 # 参考下方"环境配置"
 
-# 启动服务
-uvicorn app.main:app --host 0.0.0.0 --port 8090 --reload
+# 启动服务（--reload-dir 限定监听代码目录，避免 data/ 写入触发重载中断请求）
+uvicorn app.main:app --host 0.0.0.0 --port 8090 --reload --reload-dir app --reload-dir static
 # 或 make run
 ```
 

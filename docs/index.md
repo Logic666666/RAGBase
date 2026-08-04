@@ -37,7 +37,7 @@ ollama pull qwen3:2b          # 对话模型（按机器性能选择）
 ```bash
 # 方式一：Conda + pip
 conda create -n ai-agent python=3.11 -y 
-conda activate ai-rag
+conda activate ai-agent
 pip install -e ".[dev]"
 
 # 方式二：venv + pip
