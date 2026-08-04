@@ -40,14 +40,16 @@ class Settings(BaseSettings):
     # Git 加速器配置
     # 开关：是否启用 GitHub 镜像加速
     git_accelerator_enabled: bool = os.getenv("GIT_ACCELERATOR_ENABLED", "true").lower() == "true"
-    # 加速镜像列表（域名替换模式），逗号分隔，按优先级从前到后尝试：
-    #   replace|https://bgithub.xyz,replace|https://kkgithub.com,replace|https://github.akams.cn
-    # 含义：把 https://github.com/xxx 替换为 https://<镜像域名>/xxx
+    # 加速镜像列表，逗号分隔，按优先级从前到后尝试。
+    # 支持两种模式：
+    #   prefix|https://xxx    前缀代理：https://xxx/https://github.com/user/repo
+    #                         （适合 ghproxy 类、akams.cn 类透传代理）
+    #   replace|https://xxx   域名替换：https://github.com/user/repo
+    #                         → https://xxx/user/repo，并映射 raw/api/codeload 子域名
     git_accelerators: str = os.getenv(
         "GIT_ACCELERATORS",
-        "replace|https://bgithub.xyz,"
-        "replace|https://kkgithub.com,"
-        "replace|https://github.akams.cn",
+        "prefix|https://github.akams.cn,"
+        "replace|https://bgithub.xyz",
     )
 
     class Config:

@@ -378,27 +378,27 @@ class KnowledgeBaseService:
         if username and token and repo_url.startswith("https://") and "@" not in repo_url:
             url = repo_url.replace("https://", f"https://{username}:{token}@")
             
-        # Git 加速：域名替换模式（镜像列表从配置读取，可自定义）
-        # 将 https://github.com/user/repo 替换为 https://<镜像>/user/repo
+        # Git 加速：prefix/replace 双模式（镜像列表从配置读取，可自定义）
         if self.settings.git_accelerator_enabled and url.startswith("https://github.com"):
-            original_host = "https://github.com"
             for spec in self.settings.git_accelerators.split(","):
                 parts = spec.strip().split("|")
-                # 仅支持 replace 模式；跳过格式错误的条目
-                if len(parts) != 2 or parts[0].strip() != "replace":
+                if len(parts) != 2 or parts[0].strip() not in ("prefix", "replace"):
                     logging.warning(f"忽略无效的Git加速配置: {spec}")
                     continue
-                mirror = parts[1].strip().rstrip("/")
-                if not mirror:
+                mode = parts[0].strip()
+                base = parts[1].strip().rstrip("/")
+                if not base:
                     continue
 
-                accelerated_url = url.replace(original_host, mirror)
-                print(f"[INFO] 尝试Git加速镜像: {mirror}")
+                accelerated_url = self._accelerate_url(url, mode, base)
+                if accelerated_url == url:
+                    continue
+                print(f"[INFO] 尝试Git加速镜像 [{mode}]: {base}")
 
                 # 用 git ls-remote 真实探活（比 HTTP HEAD 可靠且更快）
                 if self._test_git_connection(accelerated_url):
                     url = accelerated_url
-                    print(f"[INFO] 成功使用Git加速镜像: {mirror}")
+                    print(f"[INFO] 成功使用Git加速镜像 [{mode}]: {base}")
                     break
             else:
                 print("[WARNING] 所有Git加速镜像均不可用，使用原始URL")
@@ -534,7 +534,51 @@ class KnowledgeBaseService:
     # ------------------------------
     # Git加速服务支持
     # ------------------------------
-    
+
+    def _accelerate_url(self, original_url: str, mode: str, base: str) -> str:
+        """
+        按加速模式转换 URL。
+
+        prefix 模式（前缀代理）：
+            https://base/https://github.com/user/repo
+            适合 ghproxy 类透传代理，原始 URL 整体拼在镜像后面
+
+        replace 模式（域名替换）：
+            https://github.com/user/repo → https://base/user/repo
+            同时映射 GitHub 子域名（raw/api/codeload），
+            因为 raw.githubusercontent.com 不含 "github.com" 子串，
+            只替换主域名会漏掉这些子域名
+
+        Args:
+            original_url: 原始 GitHub URL
+            mode:         "prefix" 或 "replace"
+            base:         镜像地址（如 https://ghproxy.net 或 https://bgithub.xyz）
+
+        Returns:
+            加速后的 URL；无法转换时返回原始 URL
+        """
+        if mode == "prefix":
+            return f"{base}/{original_url}"
+
+        if mode == "replace":
+            host = base.replace("https://", "").replace("http://", "").rstrip("/")
+            # 子域名映射：raw/api/codeload 各自的镜像子域名
+            # 注意替换顺序：先长后短，避免 github.com 先被替换导致子域名漏匹配
+            mapping = {
+                "raw.githubusercontent.com": f"raw.{host}",
+                "codeload.github.com": f"codeload.{host}",
+                "api.github.com": f"api.{host}",
+                "github.com": host,
+            }
+            result = original_url
+            for old, new in mapping.items():
+                if old in result:
+                    result = result.replace(old, new)
+                    break
+            return result
+
+        return original_url
+
     def _test_git_connection(self, url: str) -> bool:
         """
         测试Git连接是否可用
