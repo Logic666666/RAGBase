@@ -1137,38 +1137,28 @@
       : 'AI 正在检索知识库并生成回答…';
 
     try {
-      // Agent 模式调 /agent/run，普通模式调 /chat
-      const url = currentMode === 'agent' ? '/agent/run' : '/chat';
-      const payload = currentMode === 'agent'
-        ? { kb, task: q, max_steps: parseInt(document.getElementById('maxSteps').value) || 5 }
-        : { kb, question: q, top_k: parseInt(document.getElementById('topk').value) || 4 };
-
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const j = await res.json();
-
-      loadingEl.remove();
-
-      if (res.ok && j.answer) {
-        let html;
-        if (currentMode === 'agent') {
-          const srcs = extractSourcesFromTrace(j.trace?.events || []);
-          html = renderAgentFlow(j.trace?.events || [], j.answer, srcs,
-            j.trace?.total_duration_ms || null, j.completed);
-          if (!j.completed) {
-            toast('任务未完全完成（步数限制）', 'info');
-          }
-        } else {
-          const srcs = (j.sources || []).map(s => s.source).filter(Boolean);
-          html = renderAgentFlow([], j.answer, srcs, null, true);
-        }
-        addAgentMessage(html);
-        toast('回答完成', 'success');
+      if (currentMode === 'agent') {
+        // Agent 模式：异步提交任务 → 轮询进度 → 取结果
+        // 研究报告类任务是长任务（分钟级），不能同步等待
+        await askAgent(q, kb, loadingEl);
       } else {
-        addAgentMessage(`<div style="color:var(--error);padding:12px;background:var(--error-bg);border-radius:var(--radius);font-size:.85rem;">${esc(j.error || '获取答案失败')}</div>`);
+        // 普通模式：同步 /chat（秒级返回）
+        const payload = { kb, question: q, top_k: parseInt(document.getElementById('topk').value) || 4 };
+        const res = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const j = await res.json();
+        loadingEl.remove();
+
+        if (res.ok && j.answer) {
+          const srcs = (j.sources || []).map(s => s.source).filter(Boolean);
+          addAgentMessage(renderAgentFlow([], j.answer, srcs, null, true));
+          toast('回答完成', 'success');
+        } else {
+          addAgentMessage(`<div style="color:var(--error);padding:12px;background:var(--error-bg);border-radius:var(--radius);font-size:.85rem;">${esc(j.error || '获取答案失败')}</div>`);
+        }
       }
     } catch (e) {
       loadingEl.remove();
@@ -1179,6 +1169,69 @@
     btn.disabled = false;
     btn.textContent = '发送';
     setStatus('就绪');
+  }
+
+  // ====================================
+  // Agent 异步会话：提交 → 轮询 → 取结果
+  // ====================================
+  async function askAgent(q, kb, loadingEl) {
+    // 1. 提交会话，拿 session_id
+    const submitRes = await fetch('/agent/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kb,
+        task: q,
+        max_steps: parseInt(document.getElementById('maxSteps').value) || 5,
+      }),
+    });
+    const submit = await submitRes.json();
+    if (!submitRes.ok || !submit.session_id) {
+      loadingEl.remove();
+      addAgentMessage(`<div style="color:var(--error);padding:12px;background:var(--error-bg);border-radius:var(--radius);font-size:.85rem;">${esc(submit.detail || '会话提交失败')}</div>`);
+      return;
+    }
+
+    // 2. 轮询状态（5 秒间隔，研究报告任务为分钟级）
+    const sessionId = submit.session_id;
+    const loadingText = document.getElementById('loadingText');
+    for (;;) {
+      await new Promise(r => setTimeout(r, 5000));
+      const statusRes = await fetch(`/agent/status/${sessionId}`);
+      const status = await statusRes.json();
+      if (!statusRes.ok) {
+        loadingEl.remove();
+        addAgentMessage(`<div style="color:var(--error);padding:12px;background:var(--error-bg);border-radius:var(--radius);font-size:.85rem;">${esc(status.detail || '查询会话失败')}</div>`);
+        return;
+      }
+      loadingText.textContent = status.status === 'running'
+        ? `Agent 研究中（${status.steps || 0} 步完成）…`
+        : 'Agent 任务结束…';
+
+      if (status.status === 'failed') {
+        loadingEl.remove();
+        addAgentMessage(`<div style="color:var(--error);padding:12px;background:var(--error-bg);border-radius:var(--radius);font-size:.85rem;">任务失败：${esc(status.error || '未知错误')}</div>`);
+        return;
+      }
+      if (status.status === 'done') break;
+    }
+
+    // 3. 取结果并渲染
+    const resultRes = await fetch(`/agent/result/${sessionId}`);
+    const j = await resultRes.json();
+    loadingEl.remove();
+
+    if (resultRes.ok && j.answer) {
+      const srcs = extractSourcesFromTrace(j.trace?.events || []);
+      addAgentMessage(renderAgentFlow(j.trace?.events || [], j.answer, srcs,
+        j.trace?.total_duration_ms || null, j.completed));
+      if (!j.completed) {
+        toast('任务未完全完成（步数限制）', 'info');
+      }
+      toast('回答完成', 'success');
+    } else {
+      addAgentMessage(`<div style="color:var(--error);padding:12px;background:var(--error-bg);border-radius:var(--radius);font-size:.85rem;">${esc(j.error || '获取答案失败')}</div>`);
+    }
   }
 
   // ====================================

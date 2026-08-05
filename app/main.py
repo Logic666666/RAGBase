@@ -1,4 +1,7 @@
-from fastapi import FastAPI, UploadFile, File
+import os
+from functools import lru_cache
+
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi import Depends
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,6 +16,7 @@ from .tools.registry import ToolRegistry
 from .tools.builtin.knowledge_base import KnowledgeBaseTool
 from .infrastructure.llm_client import OllamaChatClient
 from .observability.tracer import Tracer
+from .sessions import JsonSessionStore, SessionManager
 
 
 app = FastAPI(title="AI RAG Knowledge", version="0.1.0")
@@ -140,24 +144,93 @@ def build_agent(settings: Settings, kb: str) -> Agent:
     return Agent(llm=llm, tools=registry, tracer=Tracer())
 
 
-@app.post("/agent/run")
-async def agent_run(body: AgentRunBody, settings: Settings = Depends(get_settings)):
+@lru_cache
+def get_session_manager() -> SessionManager:
     """
-    提交任务给 Agent。
+    会话管理器依赖注入（进程级单例）。
+
+    研究报告任务是长任务（10-30 分钟），
+    采用异步执行：提交即返回 session_id，前端轮询进度。
+
+    与 get_settings 同模式：@lru_cache + 无参，
+    保证整个进程只有一个 SessionManager 实例。
+
+    单例理由：
+      SessionManager._sessions 持有后台任务的 asyncio.Task 句柄，
+      （取消任务、终止运行中会话等能力依赖它）。
+      若每个请求新建实例，_sessions 每次都是空的，
+      这些内存态能力会全部失效。
+
+    内部自行获取 settings（lru_cache 缓存），不通过 Depends 注入参数。
+    """
+    settings = get_settings()
+    store = JsonSessionStore(os.path.join(settings.data_dir, "sessions"))
+    return SessionManager(store=store, agent_builder=build_agent)
+
+
+@app.post("/agent/run")
+async def agent_run(
+    body: AgentRunBody,
+    manager: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """
+    提交任务给 Agent（异步会话）。
 
     与 /chat 的区别：
-      - /chat: 单轮检索 + 单轮生成（快速直接）
-      - /agent/run: 多步推理循环，Agent 自主决定检索次数和策略
-        返回完整执行 Trace（可复盘）
+      - /chat: 单轮检索 + 单轮生成（快速直接，同步返回）
+      - /agent/run: 多步推理循环（长任务，异步执行）
+
+    立即返回 session_id，任务后台执行：
+      轮询 GET /agent/status/{session_id} 查进度
+      完成后 GET /agent/result/{session_id} 取结果 + trace
     """
-    agent = build_agent(settings, body.kb)
-    result = await agent.run(body.task)
+    session_id = await manager.submit(
+        kb=body.kb, task=body.task, max_steps=body.max_steps, settings=settings,
+    )
+    return {"session_id": session_id, "status": "running"}
+
+
+@app.get("/agent/status/{session_id}")
+async def agent_status(
+    session_id: str,
+    manager: SessionManager = Depends(get_session_manager),
+):
+    """查询会话进度（running / done / failed）"""
+    record = await manager.get_status(session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
 
     return {
-        "answer": result.answer,
-        "completed": result.completed,
-        "steps": result.steps,
-        "trace": agent.tracer.summary() if agent.tracer else None,
+        "session_id": record.session_id,
+        "status": record.status.value,
+        "steps": record.steps,
+        "error": record.error,
+    }
+
+
+@app.get("/agent/result/{session_id}")
+async def agent_result(
+    session_id: str,
+    manager: SessionManager = Depends(get_session_manager),
+):
+    """获取会话最终结果（answer + trace + transcript）"""
+    record = await manager.get_status(session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
+    if record.status.value == "running":
+        raise HTTPException(status_code=409, detail="会话仍在执行中")
+
+    return {
+        "session_id": record.session_id,
+        "status": record.status.value,
+        "answer": record.result,
+        "completed": record.completed,
+        "steps": record.steps,
+        "trace": record.trace,
+        # transcript：完整消息历史（resume/追溯的数据基础）
+        "messages": record.messages,
+        "error": record.error,
     }
 
 
