@@ -13,10 +13,15 @@
     # → "你好！我是助手。"
 """
 
+import asyncio
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from ..reliability.retry import RetryPolicy
 
 # 匹配 <think>...</think> 标签（非贪婪，支持多行）
 _THINK_TAG_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
@@ -103,6 +108,7 @@ class OllamaChatClient:
         timeout: int = 300,
         think: bool = False,
         max_tokens: int | None = None,
+        retry_policy: "RetryPolicy | None" = None,
     ):
         """
         Args:
@@ -113,6 +119,9 @@ class OllamaChatClient:
             think:       是否启用思考型模型的 think 阶段。
                          关闭可大幅提速（Agent 已有显式 thought）。
             max_tokens:  单次生成的最大 token 数；None 表示不限制。
+            retry_policy: 重试策略（transient 错误自动退避重试）。
+                          默认 ExponentialBackoff（对齐 Claude Code 的
+                          retry with backoff，单轮上限 3 次）。
         """
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -120,6 +129,8 @@ class OllamaChatClient:
         self.timeout = timeout
         self.think = think
         self.max_tokens = max_tokens
+        from ..reliability.retry import ExponentialBackoff
+        self.retry_policy = retry_policy or ExponentialBackoff()
 
 
     # 公开接口
@@ -199,13 +210,22 @@ class OllamaChatClient:
             "options": options,
         }
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(
-                f"{self.base_url}/api/chat",
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        # 带重试的请求（对齐 Claude Code 的 retry with backoff）：
+        # transient 错误（网络闪断/超时/5xx）自动退避重试，
+        # permanent 错误直接抛出——重试只会重复失败
+        attempt = 0
+        while True:
+            try:
+                data = await self._send_request(payload)
+                break
+            except Exception as e:
+                from ..reliability.errors import classify_error
+                category = classify_error(e)
+                if not self.retry_policy.should_retry(attempt, category):
+                    raise
+                delay = self.retry_policy.next_delay(attempt)
+                await asyncio.sleep(delay)
+                attempt += 1
 
         # Ollama 返回格式：
         # {"message": {"role": "assistant", "thinking": "...", "content": "..."}, "done": true}
@@ -223,3 +243,18 @@ class OllamaChatClient:
             thinking, content = _extract_think_tags(content)
 
         return ChatResponse(content=content, thinking=thinking, done=done)
+
+    async def _send_request(self, payload: dict) -> dict:
+        """
+        发送一次 HTTP 请求并返回响应 JSON。
+
+        单独抽出来便于重试循环调用（每次重试都是全新请求）。
+        异常（超时/连接/HTTP 状态）由调用方的重试循环处理。
+        """
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            resp = await client.post(
+                f"{self.base_url}/api/chat",
+                json=payload,
+            )
+            resp.raise_for_status()
+            return resp.json()
