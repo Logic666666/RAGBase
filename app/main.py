@@ -93,7 +93,12 @@ def list_kb(kb: KnowledgeBaseService = Depends(get_kb_service)):
 
 @app.delete("/kb/{name}")
 def delete_kb(name: str, kb: KnowledgeBaseService = Depends(get_kb_service)):
-    kb.delete_kb(name)
+    ok = kb.delete_kb(name)
+    if not ok:
+        raise HTTPException(
+            status_code=500,
+            detail=f"删除知识库 {name} 失败（可能存在文件占用或权限问题）",
+        )
     return {"deleted": name}
 
 

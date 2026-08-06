@@ -26,7 +26,9 @@ async def test_create_and_get(store):
     assert fetched is not None
     assert fetched.session_id == "abc123"
     assert fetched.task == "调研"
-    assert fetched.status == SessionStatus.RUNNING
+    # 用 is 断言（str-Enum 的 == 与字符串相等，会掩盖类型问题）
+    assert isinstance(fetched.status, SessionStatus)
+    assert fetched.status is SessionStatus.RUNNING
 
 
 @pytest.mark.asyncio
@@ -79,3 +81,16 @@ async def test_list_order(store):
 async def test_update_nonexistent_no_error(store):
     """更新不存在的会话不应报错（静默忽略）"""
     await store.update("ghost", {"status": SessionStatus.DONE})
+
+
+@pytest.mark.asyncio
+async def test_status_roundtrip_keeps_enum(store):
+    """status 必须保持枚举类型（防止 str-Enum 序列化陷阱）"""
+    record = SessionRecord(session_id="rt", kb="test", task="任务", max_steps=5,
+                           status=SessionStatus.DONE)
+    await store.create(record)
+
+    fetched = await store.get("rt")
+    assert fetched.status is SessionStatus.DONE
+    # .value 可用（之前这个调用直接 AttributeError）
+    assert fetched.status.value == "done"

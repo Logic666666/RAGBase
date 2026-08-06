@@ -13,7 +13,7 @@ import os
 import time
 from dataclasses import asdict
 
-from .base import SessionRecord, SessionStore
+from .base import SessionRecord, SessionStatus, SessionStore
 
 
 class JsonSessionStore(SessionStore):
@@ -36,8 +36,13 @@ class JsonSessionStore(SessionStore):
         return os.path.join(self.sessions_dir, f"{session_id}.json")
 
     async def create(self, record: SessionRecord) -> None:
+        data = asdict(record)
+        # 显式存枚举的 value（"running"/"done"/"failed"）：
+        # str-Enum 直接 json 序列化会存成 name 形式（如 "SessionStatus.DONE"），
+        # 读回来无法还原为枚举
+        data["status"] = record.status.value
         with open(self._path(record.session_id), "w", encoding="utf-8") as f:
-            json.dump(asdict(record), f, ensure_ascii=False, indent=2)
+            json.dump(data, f, ensure_ascii=False, indent=2)
 
     async def update(self, session_id: str, patch: dict) -> None:
         record = await self.get(session_id)
@@ -55,6 +60,8 @@ class JsonSessionStore(SessionStore):
             return None
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        # 字符串 → 枚举（否则 record.status 是纯字符串，.value 会报错）
+        data["status"] = SessionStatus(data["status"])
         return SessionRecord(**data)
 
     async def list(self) -> list[SessionRecord]:
