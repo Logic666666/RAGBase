@@ -108,87 +108,52 @@ class KnowledgeBaseService:
 
     def delete_kb(self, name: str) -> bool:
         """
-        删除指定的知识库及其所有内容
-        
-        该方法会删除知识库的源文件目录和向量存储目录，
-        并返回删除操作的实际结果。
-        
+        删除指定的知识库及其所有内容。
+
+        删除顺序（关键）：
+          1. 向量目录：先通过 VectorStore.delete_collection()
+             让 ChromaDB 删除集合并显式 close()——释放 chroma.sqlite3 的文件句柄
+             （Windows 上句柄未释放时 rmtree 必失败，这是删除失败的唯一根因）
+          2. 再删除源文件目录和向量目录
+
         Args:
             name: 要删除的知识库名称
-            
+
         Returns:
-            bool: 如果所有目录都被成功删除则返回True，否则返回False
+            bool: 目录是否全部删除成功
         """
-        # 记录初始状态
-        initial_root_exists = os.path.exists(self.kb_root(name))
-        initial_vector_exists = os.path.exists(self.kb_vector_dir(name))
-        
-        # 如果两个目录都不存在，直接返回True
-        if not initial_root_exists and not initial_vector_exists:
+        import logging
+
+        root_dir = self.kb_root(name)
+        vector_dir = self.kb_vector_dir(name)
+
+        root_exists = os.path.exists(root_dir)
+        vector_exists = os.path.exists(vector_dir)
+        if not root_exists and not vector_exists:
             return True
-            
-        # 尝试删除目录，处理Windows权限问题
-        try:
-            if initial_root_exists:
-                # 对于Windows系统，先尝试修改文件权限
-                if os.name == 'nt':
-                    self._modify_windows_permissions(self.kb_root(name))
-                shutil.rmtree(self.kb_root(name))
-                
-            if initial_vector_exists:
-                if os.name == 'nt':
-                    self._modify_windows_permissions(self.kb_vector_dir(name))
-                shutil.rmtree(self.kb_vector_dir(name))
-                
-        except Exception as e:
-            # 第一次删除失败，尝试使用更激进的方法
+
+        # 1. 释放向量文件句柄（删除成功的前提）
+        if vector_exists:
             try:
-                if initial_root_exists and os.path.exists(self.kb_root(name)):
-                    if os.name == 'nt':
-                        # 使用Windows命令行强制删除
-                        import subprocess
-                        # 使用PowerShell命令强制删除（最高权限）
-                        subprocess.run(
-                            ['powershell', '-Command', 'Remove-Item', '-Path', f'"{self.kb_root(name)}"', '-Recurse', '-Force', '-ErrorAction', 'Stop'],
-                            check=True,
-                            capture_output=True,
-                            text=True
-                        )
-                    else:
-                        # Linux/macOS系统使用chmod + rm -rf
-                        subprocess.run(
-                            ['chmod', '-R', '777', self.kb_root(name)],
-                            check=True
-                        )
-                        shutil.rmtree(self.kb_root(name))
-                        
-                if initial_vector_exists and os.path.exists(self.kb_vector_dir(name)):
-                    if os.name == 'nt':
-                        import subprocess
-                        subprocess.run(
-                            ['cmd', '/c', 'rmdir', '/s', '/q', self.kb_vector_dir(name)],
-                            check=True,
-                            capture_output=True,
-                            text=True
-                        )
-                    else:
-                        subprocess.run(
-                            ['chmod', '-R', '777', self.kb_vector_dir(name)],
-                            check=True
-                        )
-                        shutil.rmtree(self.kb_vector_dir(name))
+                VectorStore(self.settings).delete_collection(vector_dir)
             except Exception as e:
-                # 记录删除失败的异常信息
-                import logging
-                logging.error(f"删除知识库 '{name}' 失败: {str(e)}")
+                logging.warning(f"删除向量集合失败（继续尝试删目录）: {e}")
+
+        # 2. 删除目录（句柄已释放，正常应成功）
+        for d in (root_dir, vector_dir):
+            if not os.path.exists(d):
+                continue
+            if os.name == 'nt':
+                # 处理只读文件导致的权限问题
+                self._modify_windows_permissions(d)
+            try:
+                shutil.rmtree(d)
+            except Exception as e:
+                logging.error(f"删除知识库 '{name}' 失败: {e}")
                 return False
-                
-        # 验证删除结果
-        root_deleted = not os.path.exists(self.kb_root(name))
-        vector_deleted = not os.path.exists(self.kb_vector_dir(name))
-        
-        return root_deleted and vector_deleted
-        
+
+        return not os.path.exists(root_dir) and not os.path.exists(vector_dir)
+
     def _modify_windows_permissions(self, path: str) -> None:
         """修改Windows系统文件权限以允许删除"""
         import ctypes

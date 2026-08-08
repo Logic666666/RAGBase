@@ -39,7 +39,15 @@ class VectorStore:
     - 换向量库时要重新配置 embedding
 
     故选择"客户端算好再传"的模式。
+
+    client 生命周期管理：
+      同一目录的 PersistentClient 跨请求复用（类级共享池），
+      避免重复加载元数据；删除集合时显式 close() 释放文件句柄
+      （Windows 上句柄未释放会导致目录删除失败）。
     """
+
+    # 类级共享 client 池：key = 持久化目录，value = PersistentClient
+    _shared_clients: dict[str, "chromadb.PersistentClient"] = {}
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -134,26 +142,53 @@ class VectorStore:
 
     # 公开接口：删除集合
     def delete_collection(self, persist_dir: str) -> None:
-        """删除整个向量集合（对应删除知识库时清理向量数据）"""
-        collection_name = self._safe_collection_name(persist_dir)
-        client = chromadb.PersistentClient(
-            path=persist_dir,
-            settings=ChromaSettings(anonymized_telemetry=False),
-        )
-        try:
-            client.delete_collection(collection_name)
-        except ValueError:
-            # 集合不存在时 ChromaDB 会抛 ValueError，忽略
-            pass
+        """
+        删除整个向量集合，并关闭该目录的 client（释放文件句柄）。
 
+        对应删除知识库时清理向量数据。
+        显式 close() 是 Windows 上目录可删除的前提——
+        ChromaDB client 持有 chroma.sqlite3 的句柄，
+        不关闭则 rmtree 失败。
+        """
+        client = self._shared_clients.pop(persist_dir, None)
+        if client is None:
+            # 无缓存 client（该目录未被操作过）：新建临时 client 删除
+            client = chromadb.PersistentClient(
+                path=persist_dir,
+                settings=ChromaSettings(anonymized_telemetry=False),
+            )
+        try:
+            client.delete_collection(self._safe_collection_name(persist_dir))
+        except (ValueError, NotFoundError):
+            # 集合不存在是正常情况（如新建未上传的知识库），静默忽略
+            pass
+        finally:
+            client.close()  # 精确释放文件句柄，不依赖 GC
+
+    def close(self) -> None:
+        """关闭所有缓存的 client（进程退出/测试清理时调用）"""
+        for client in self._shared_clients.values():
+            try:
+                client.close()
+            except Exception:
+                pass
+        self._shared_clients.clear()
 
     # 内部方法
+    def _get_client(self, persist_dir: str) -> "chromadb.PersistentClient":
+        """获取（并缓存）指定目录的 client——同目录跨请求复用"""
+        client = self._shared_clients.get(persist_dir)
+        if client is None:
+            client = chromadb.PersistentClient(
+                path=persist_dir,
+                settings=ChromaSettings(anonymized_telemetry=False),
+            )
+            self._shared_clients[persist_dir] = client
+        return client
+
     def _get_or_create_collection(self, persist_dir: str):
         """获取或创建 ChromaDB 集合"""
-        client = chromadb.PersistentClient(
-            path=persist_dir,
-            settings=ChromaSettings(anonymized_telemetry=False),
-        )
+        client = self._get_client(persist_dir)
         collection_name = self._safe_collection_name(persist_dir)
 
         try:

@@ -74,7 +74,7 @@ class ExponentialBackoff(RetryPolicy):
         return attempt < self.max_attempts
 
     def next_delay(self, attempt: int) -> float:
-        # 指数退避：base * 2^attempt，上限 max_delay
-        delay = min(self.max_delay, self.base_delay * (2 ** attempt))
-        # 抖动 ±20%：避免多个请求同时重试造成雪崩
-        return delay * random.uniform(0.8, 1.2)
+        # 指数退避 + 抖动，最后封顶：
+        # 先乘抖动再封顶，保证延迟严格不超过 max_delay
+        delay = self.base_delay * (2 ** attempt) * random.uniform(0.8, 1.2)
+        return min(self.max_delay, delay)

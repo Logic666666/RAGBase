@@ -22,6 +22,7 @@ Agent 循环（ReAct Orchestrator）
 
 from ..infrastructure.llm_client import Message, OllamaChatClient
 from ..tools.registry import ToolRegistry
+from .context import ContextCompressor, TrimCompressor
 from .prompts import system_prompt
 from .schemas import AgentResult, parse_tool_call
 
@@ -41,20 +42,24 @@ class Agent:
         tracer=None,
         max_steps: int = 5,
         max_parse_failures: int = 2,
+        compressor: ContextCompressor | None = None,
     ):
         """
         Args:
-            llm:             手搓的 LLM 客户端
+            llm:             手写的 LLM 客户端
             tools:           工具注册中心
             tracer:          可观测记录器
             max_steps:       最大循环步数（防死循环，默认 5）
             max_parse_failures: 连续解析失败的容忍次数（默认 2）
+            compressor:      上下文压缩器（工具结果裁剪）。
+                             默认 TrimCompressor，控制单轮结果占用
         """
         self.llm = llm
         self.tools = tools
         self.tracer = tracer
         self.max_steps = max_steps
         self.max_parse_failures = max_parse_failures
+        self.compressor = compressor or TrimCompressor()
         # 本次执行的消息历史（transcript）：
         # 运行结束后可读取（agent.history），
         # 由 SessionManager 落盘，支持恢复执行（resume）与追溯
@@ -120,6 +125,11 @@ class Agent:
                 result = await self.tools.execute(tool_call.tool, tool_call.arguments)
                 self._trace("tool_result", result.content)
 
+                # 上下文管理：工具结果进入消息历史前裁剪
+                # （对齐 Claude Code 的 tool output 压缩——
+                #   来源保留可重查，正文截断控制上下文占用）
+                tool_content = self.compressor.compress_tool_result(result.content)
+
                 # 把 LLM 的工具调用和工具结果写回消息历史
                 # 成功/失败用不同前缀（对应 Claude Code 的 tool_result + is_error 标记），
                 # 模型能明确区分结果与错误
@@ -128,14 +138,14 @@ class Agent:
                     messages.append(
                         Message(
                             role="user",
-                            content=f"[工具结果 {tool_call.tool}]\n{result.content}",
+                            content=f"[工具结果 {tool_call.tool}]\n{tool_content}",
                         )
                     )
                 else:
                     messages.append(
                         Message(
                             role="user",
-                            content=f"[工具错误 {tool_call.tool}]\n{result.content}",
+                            content=f"[工具错误 {tool_call.tool}]\n{tool_content}",
                         )
                     )
 
