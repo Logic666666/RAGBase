@@ -15,7 +15,6 @@
 """
 
 import asyncio
-import time
 import uuid
 from typing import Callable
 
@@ -92,13 +91,15 @@ class SessionManager:
         为中断恢复（resume）与全程追溯提供数据基础。
         """
         try:
-            agent = self.agent_builder(settings, record.kb)
+            # 传 session_id：build_agent 用它创建按会话隔离的工作区
+            agent = self.agent_builder(settings, record.kb, record.session_id)
             result = await agent.run(record.task)
 
             await self.store.update(record.session_id, {
                 "status": SessionStatus.DONE,
                 "result": result.answer,
                 "completed": result.completed,
+                "reason": result.reason,
                 "steps": result.steps,
                 # transcript：完整消息历史（resume/追溯的数据基础）
                 "messages": agent.history,

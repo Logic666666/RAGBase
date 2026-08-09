@@ -40,11 +40,10 @@ class KnowledgeBaseTool(BaseTool):
         return ToolSpec(
             name="search_kb",
             description=(
-                "在项目的知识库中搜索与 query 相关的文档片段。"
-                "这是回答任何项目问题的唯一信息源，"
-                "回答任何关于项目、文档、代码、技术方案的问题前必须先调用本工具。"
-                "返回的文档片段按相关度从高到低排列，每个片段包含来源文件路径。"
-                "如果一次检索结果不完整，可以换关键词多次调用。"
+                "在知识库中检索与 query 语义相关的文档片段（README、方案、笔记等文档）。"
+                "用于获取项目背景、技术方案、历史决策等信息。"
+                "返回片段按相关度排列，包含来源路径。"
+                "注意：这是文档检索工具；分析代码实现请用 grep_code / read_file / list_files。"
             ),
             parameters={
                 "type": "object",
@@ -94,4 +93,18 @@ class KnowledgeBaseTool(BaseTool):
             f"[{i+1}] ({d['source']})\n{d['text']}"
             for i, d in enumerate(docs)
         ]
-        return "\n\n".join(parts)
+        result = "\n\n".join(parts)
+
+        # 引导换工具：如果检索到的都是代码文件（.py/.java 等），
+        # 说明这是代码分析任务——向量检索对代码命中差，
+        # 明确提示模型改用 grep_code / read_file 分析实现。
+        # （小模型的工具选择能力弱，prompt 抽象规则不如具体提示有效）
+        code_exts = (".py", ".java", ".js", ".ts", ".go", ".cpp", ".c", ".h", ".rs")
+        if all(d["source"].lower().endswith(code_exts) for d in docs):
+            result += (
+                "\n\n[提示] 以上片段来自代码文件。"
+                "若要分析代码实现，请使用 grep_code 定位相关文件、"
+                "read_file 读取代码，而不是继续 search_kb。"
+            )
+
+        return result

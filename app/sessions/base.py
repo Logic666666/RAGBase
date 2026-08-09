@@ -42,7 +42,8 @@ class SessionRecord:
     updated_at: float = field(default_factory=time.time)
     messages: list[dict] = field(default_factory=list)   # transcript（消息历史）
     result: str | None = None          # 最终回答
-    completed: bool | None = None      # Agent 是否正常完成（False=步数截断）
+    completed: bool | None = None      # Agent 是否正常完成
+    reason: str | None = None          # 未完成原因（"max_steps" / "tool_errors"）
     steps: int | None = None           # 执行步数
     trace: dict | None = None          # 完整 trace（可复盘）
     error: str | None = None           # 失败原因

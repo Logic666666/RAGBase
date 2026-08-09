@@ -147,9 +147,9 @@ class BaseTool(ABC):
         # 1. 参数校验
         error = self._validate_params(kwargs)
         if error:
-            return ToolResult.error(
-                f"工具参数错误: {error}。请检查参数后重试。"
-            )
+            # error 已含明确的纠正提示（如"缺少必填参数: 'x'（描述）。请补充..."），
+            # 不再追加重复的"请检查参数后重试"
+            return ToolResult.error(f"工具参数错误: {error}")
 
         # 2. 执行 + 异常兜底
         try:
@@ -171,6 +171,9 @@ class BaseTool(ABC):
         - 参数类型不对 → 报错
         - 出现 schema 外的参数（additionalProperties: false）→ 报错
 
+        错误信息对 LLM 友好化（对齐 Claude Code 的 Input Backfill 思路）：
+        缺失必填参数时，从 schema 提取字段描述生成具体的"该传什么"的提示。
+
         Returns:
             错误描述字符串；参数合法返回 None
         """
@@ -181,5 +184,25 @@ class BaseTool(ABC):
             )
             return None
         except jsonschema.ValidationError as e:
-            # e.message 是 jsonschema 生成的准确错误描述
-            return f"{e.message} (path: {list(e.path)})"
+            return self._friendly_param_error(e, kwargs)
+
+    def _friendly_param_error(
+        self, e: jsonschema.ValidationError, kwargs: dict
+    ) -> str:
+        """把 jsonschema 错误转成对 LLM 友好的提示"""
+        # 缺失必填参数：从 schema 提取每个缺失字段的描述
+        if e.validator == "required":
+            required = e.schema.get("required", [])
+            missing = [name for name in required if name not in kwargs]
+            if missing:
+                props = self.spec.parameters.get("properties", {})
+                hints = []
+                for name in missing:
+                    desc = props.get(name, {}).get("description", "")
+                    hints.append(f"'{name}'（{desc}）" if desc else f"'{name}'")
+                return (
+                    f"缺少必填参数: {', '.join(hints)}。"
+                    f"请补充这些参数后重新调用。"
+                )
+        # 其他错误：原始信息 + 路径
+        return f"{e.message} (path: {list(e.path)})"

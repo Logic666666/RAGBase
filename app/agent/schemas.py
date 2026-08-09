@@ -37,12 +37,16 @@ class AgentResult:
     Agent 一次执行的结果。
 
     answer:   最终回答文本
-    completed:是否正常完成（False 表示达到 max_steps 被截断）
+    completed:是否正常完成
     steps:    执行了多少步
+    reason:   未完成的原因（completed=False 时）：
+              "max_steps"   → 达到步数上限被截断
+              "tool_errors" → 工具调用连续出错主动放弃
     """
     answer: str
     completed: bool = True
     steps: int = 0
+    reason: str | None = None
 
 
 def parse_tool_call(text: str) -> Optional[ToolCall]:
@@ -81,7 +85,16 @@ def parse_tool_call(text: str) -> Optional[ToolCall]:
     if data and "tool" in data:
         return _to_tool_call(data)
 
-    # 尝试 2：从混合文本中提取 {..} 子串
+    # 尝试 2：截断的 JSON（小模型生成中断常见）——
+    # 以 { 开头、含 "tool" 但缺结尾 }，逐次补 1~3 个 } 再试
+    # （截断点可能在嵌套 dict 内，需要补多个闭合括号）
+    if text.startswith("{") and "}" not in text and '"tool"' in text:
+        for n in range(1, 4):
+            data = _parse_json(text + "}" * n)
+            if data and "tool" in data:
+                return _to_tool_call(data)
+
+    # 尝试 3：从混合文本中提取 {..} 子串
     # 模型可能先输出思考/规划文本，最后附一个 JSON 工具调用
     start = text.find("{")
     end = text.rfind("}")

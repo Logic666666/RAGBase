@@ -41,7 +41,7 @@ class Agent:
         tools: ToolRegistry,
         tracer=None,
         max_steps: int = 5,
-        max_parse_failures: int = 2,
+        max_parse_failures: int = 3,
         compressor: ContextCompressor | None = None,
     ):
         """
@@ -159,6 +159,7 @@ class Agent:
                                    f"最后一次错误: {result.content[:200]}",
                             completed=False,
                             steps=step + 1,
+                            reason="tool_errors",
                         )
 
             # 3. 达到 max_steps
@@ -168,6 +169,7 @@ class Agent:
                        f"请尝试将任务分解为更小的步骤。",
                 completed=False,
                 steps=self.max_steps,
+                reason="max_steps",
             )
         finally:
             # transcript：把消息历史转为可序列化 dict 列表

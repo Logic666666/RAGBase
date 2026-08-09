@@ -73,3 +73,15 @@ def test_mixed_text_is_still_final_answer_without_json():
     """混合文本但没有 JSON 工具调用 → 视为最终回答"""
     text = "根据我的分析，这个项目使用了 MediaPipe 实现手势识别。"
     assert parse_tool_call(text) is None
+
+
+def test_truncated_json_repaired():
+    """
+    截断的 JSON（缺结尾 }）应被修复解析。
+    小模型生成中断时常输出不完整 JSON，若被当作最终回答会返回垃圾文本。
+    """
+    text = '{"thought": "需要读取代码", "tool": "read_file", "arguments": {"path": "main.py"'
+    result = parse_tool_call(text)
+    assert result is not None
+    assert result.tool == "read_file"
+    assert result.arguments == {"path": "main.py"}

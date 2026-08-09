@@ -35,8 +35,8 @@ class FakeAgent:
 
 
 def make_agent_builder(agent):
-    """构造 mock agent_builder：忽略 settings/kb，返回固定 agent"""
-    def builder(settings, kb):
+    """构造 mock agent_builder：忽略参数，返回固定 agent"""
+    def builder(settings, kb, session_id=None):
         return agent
     return builder
 

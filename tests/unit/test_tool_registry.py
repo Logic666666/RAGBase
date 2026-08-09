@@ -85,6 +85,21 @@ async def test_execute_missing_required_param(registry):
 
 
 @pytest.mark.asyncio
+async def test_missing_param_error_is_friendly(registry):
+    """
+    缺失必填参数的报错应对 LLM 友好：
+    包含字段描述（"该传什么"），而非只有 jsonschema 原始信息。
+    """
+    result = await registry.execute("fake_tool", {})
+    assert result.ok is False
+    # 应包含字段名和描述（测试工具的 query 描述为"测试工具的查询关键词"）
+    assert "'query'" in result.content
+    assert "缺少必填参数" in result.content
+    # 不再返回裸的 jsonschema 信息
+    assert "required property" not in result.content
+
+
+@pytest.mark.asyncio
 async def test_execute_wrong_type(registry):
     result = await registry.execute("fake_tool", {"query": "hello", "top_k": "abc"})
     assert result.ok is False

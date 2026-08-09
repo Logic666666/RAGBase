@@ -14,9 +14,12 @@ from .services.rag import RagService
 from .agent.orchestrator import Agent
 from .tools.registry import ToolRegistry
 from .tools.builtin.knowledge_base import KnowledgeBaseTool
+from .tools.builtin.codebase import GrepCodeTool, ReadFileTool, ListFilesTool
+from .tools.builtin.note_take import NoteTakeTool, ReadNoteTool, ListNotesTool
 from .infrastructure.llm_client import OllamaChatClient
 from .observability.tracer import Tracer
 from .sessions import JsonSessionStore, SessionManager
+from .workspace import FileWorkspace
 
 
 app = FastAPI(title="AI RAG Knowledge", version="0.1.0")
@@ -124,20 +127,33 @@ async def chat(body: ChatBody, rag: RagService = Depends(get_rag_service)):
     return {"answer": answer, "sources": sources}
 
 
-def build_agent(settings: Settings, kb: str) -> Agent:
+def build_agent(settings: Settings, kb: str, session_id: str) -> Agent:
     """
     构建 Agent 实例。
 
     组装逻辑：
-      1. RagService（共享检索）
-      2. KnowledgeBaseTool（把检索包装为工具，固定知识库）
-      3. ToolRegistry（注册工具）
-      4. LLMClient（推理引擎）
-      5. Tracer（可观测）
+      1. 文档检索工具：KnowledgeBaseTool（search_kb）
+      2. 代码库工具：grep_code / read_file / list_files
+         （对齐 Claude Code 的 Grep/Read/Glob——代码分析用精确搜索而非向量检索）
+      3. 工作区笔记：note_take / read_note / list_notes
+         （对齐 Claude Code 的 filesystem as memory——中间产物外置）
+      4. LLMClient（推理引擎）+ Tracer（可观测）
+
+    代码库 = 知识库的 source 目录（用户上传/导入的代码所在地）
+    工作区 = data/sessions/{session_id}/（按会话隔离，每个任务自己的笔记）
     """
     rag = RagService(settings)
+    codebase_dir = os.path.join(settings.data_dir, "kb", kb, "source")
+    workspace = FileWorkspace(os.path.join(settings.data_dir, "sessions", session_id))
+
     registry = ToolRegistry()
     registry.register(KnowledgeBaseTool(rag, kb))
+    registry.register(GrepCodeTool(codebase_dir))
+    registry.register(ReadFileTool(codebase_dir))
+    registry.register(ListFilesTool(codebase_dir))
+    registry.register(NoteTakeTool(workspace))
+    registry.register(ReadNoteTool(workspace))
+    registry.register(ListNotesTool(workspace))
 
     llm = OllamaChatClient(
         base_url=settings.ollama_base_url,
@@ -231,6 +247,7 @@ async def agent_result(
         "status": record.status.value,
         "answer": record.result,
         "completed": record.completed,
+        "reason": record.reason,
         "steps": record.steps,
         "trace": record.trace,
         # transcript：完整消息历史（resume/追溯的数据基础）

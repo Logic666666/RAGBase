@@ -1224,7 +1224,7 @@
     if (resultRes.ok && j.answer) {
       const srcs = extractSourcesFromTrace(j.trace?.events || []);
       addAgentMessage(renderAgentFlow(j.trace?.events || [], j.answer, srcs,
-        j.trace?.total_duration_ms || null, j.completed));
+        j.trace?.total_duration_ms || null, j.completed, j.reason));
       if (!j.completed) {
         toast('任务未完全完成（步数限制）', 'info');
       }
@@ -1238,7 +1238,7 @@
   // AI 侧流程渲染（Thought → 工具 → 回答）
   // 返回 HTML 字符串，由 addAgentMessage 追加到对话流
   // ====================================
-  function renderAgentFlow(events, answer, sources, totalMs, completed) {
+  function renderAgentFlow(events, answer, sources, totalMs, completed, reason) {
     let html = '';
 
     // 事件流：Thought → 工具调用 → 工具结果
@@ -1306,11 +1306,13 @@
 
     // 统计条
     const maxStep = (events || []).reduce((m, e) => Math.max(m, e.step || 0), 0);
+    const reasonText = reason === 'tool_errors' ? '未完成（工具连续错误）'
+      : (reason === 'max_steps' ? '未完成（步数限制）' : '');
     html += `<div class="tl-stats">
       ${totalMs ? `<span>总耗时 ${formatDuration(totalMs)}</span>` : ''}
       ${events.length ? `<span>步骤 ${maxStep}</span>
       <span>工具调用 ${toolCount} 次</span>` : ''}
-      ${completed === false ? '<span style="color:var(--warning);">未完成（步数限制）</span>' : ''}
+      ${completed === false && reasonText ? `<span style="color:var(--warning);">${reasonText}</span>` : ''}
     </div>`;
 
     return html;
