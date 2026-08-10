@@ -83,3 +83,13 @@ class SessionStore(ABC):
     async def list(self) -> list[SessionRecord]:
         """列出所有会话记录（按创建时间倒序）"""
         ...
+
+    @abstractmethod
+    async def delete(self, session_id: str) -> None:
+        """删除会话记录及其工作区数据"""
+        ...
+
+    @abstractmethod
+    async def cleanup(self, max_sessions: int) -> int:
+        """保留最近 max_sessions 个会话，删除更旧的；返回删除数量"""
+        ...

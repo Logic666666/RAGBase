@@ -75,10 +75,16 @@ class ChatResponse:
                  或从 content 中的 <think>...</think> 标签提取。
                  无思考时为空字符串。
     - done:      是否完成（非流式永远 True，流式预留）
+    - done_reason: 结束原因（对齐 Claude Code 的 stop_reason）：
+                 "stop"         正常完成
+                 "length"       达到 num_predict 上限（输出被截断）
+                 "model_length" 达到模型上下文上限
+                 记录它用于诊断"输出截断"类问题，不再靠猜。
     """
     content: str
     thinking: str = ""
     done: bool = True
+    done_reason: str = "stop"
 
 
 class OllamaChatClient:
@@ -108,6 +114,7 @@ class OllamaChatClient:
         timeout: int = 300,
         think: bool = False,
         max_tokens: int | None = None,
+        num_ctx: int = 8192,
         retry_policy: "RetryPolicy | None" = None,
     ):
         """
@@ -119,6 +126,9 @@ class OllamaChatClient:
             think:       是否启用思考型模型的 think 阶段。
                          关闭可大幅提速（Agent 已有显式 thought）。
             max_tokens:  单次生成的最大 token 数；None 表示不限制。
+            num_ctx:     上下文窗口大小（token）。Agent 的消息历史
+                         （system + 工具调用 + 结果）占用大量上下文，
+                         Ollama 默认 2048/4096 会导致回答被 length 截断。
             retry_policy: 重试策略（transient 错误自动退避重试）。
                           默认 ExponentialBackoff（对齐 Claude Code 的
                           retry with backoff，单轮上限 3 次）。
@@ -129,6 +139,7 @@ class OllamaChatClient:
         self.timeout = timeout
         self.think = think
         self.max_tokens = max_tokens
+        self.num_ctx = num_ctx
         from ..reliability.retry import ExponentialBackoff
         self.retry_policy = retry_policy or ExponentialBackoff()
 
@@ -191,10 +202,13 @@ class OllamaChatClient:
             }
         """
         # 动态组装 payload：
-        # think / max_tokens 由配置注入（.env 可配），
+        # think / max_tokens / num_ctx 由配置注入（.env 可配），
         # max_tokens 为 None 时不传（不限制长度）
         options: dict = {
             "temperature": self.temperature,
+            # 上下文窗口：Agent 消息历史占用大，默认 2048/4096 会导致
+            # 回答被 done_reason=length 截断
+            "num_ctx": self.num_ctx,
         }
         if self.max_tokens is not None:
             options["num_predict"] = self.max_tokens
@@ -234,6 +248,8 @@ class OllamaChatClient:
         content = message.get("content", "")
         thinking = message.get("thinking", "") or ""
         done = data.get("done", True)
+        # 结束原因（诊断截断的关键）："stop"正常 / "length"触顶 / "model_length"上下文满
+        done_reason = data.get("done_reason", "stop")
 
         # 双通道提取思考内容：
         # 通道 1：message.thinking 结构化字段（新版 Ollama）
@@ -242,7 +258,8 @@ class OllamaChatClient:
         if not thinking:
             thinking, content = _extract_think_tags(content)
 
-        return ChatResponse(content=content, thinking=thinking, done=done)
+        return ChatResponse(content=content, thinking=thinking, done=done,
+                            done_reason=done_reason)
 
     async def _send_request(self, payload: dict) -> dict:
         """

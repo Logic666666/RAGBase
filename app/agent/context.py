@@ -54,30 +54,35 @@ class ContextCompressor(ABC):
 
 class TrimCompressor(ContextCompressor):
     """
-    工具结果裁剪（当前方案）。
+    工具结果裁剪（兜底方案，对齐 Claude Code 的 tool output 设计）。
 
-    策略：超过 max_chars 时截断，但保留开头部分
-    ——检索结果的格式是 "[1] (来源路径)\n内容..."，
-    来源路径在最前面，截断后依然可追溯、可重查。
-
-    选择截断而不是摘要：
-      摘要需要 LLM 调用（慢 + 烧 token + 可能丢关键细节），
-      而研究报告场景 Agent 需要细节时可以重新检索——
-      "我需要这个工具输出的全部内容，还是只需要结论？"
+    设计原则（借鉴 Claude Code）：
+      1. 阈值要足够大，只做"安全兜底"，不做主动压缩——
+         Claude Code 的截断阈值以万字符计（Bash 30K / MCP 25K token），
+         过小的阈值会截断模型必须看到的结构化信息（如文件列表）
+      2. 截断提示必须揭示总量——模型需要知道"结果有 N 字符，只看到前 M"，
+         否则会误以为读到完整内容（Claude Code：completeness misjudgment）
+      3. 输出量控制是工具的职责（read_file 的 max_chars、grep 的 max_results），
+         orchestrator 的压缩只做最后兜底
     """
 
-    def __init__(self, max_chars: int = 2000):
+    def __init__(self, max_chars: int = 8000):
         """
         Args:
-            max_chars: 单次工具结果进入上下文的最大字符数
+            max_chars: 单次工具结果进入上下文的最大字符数（兜底阈值）
         """
         self.max_chars = max_chars
 
     def compress_tool_result(self, result: str) -> str:
         if len(result) <= self.max_chars:
             return result
-        # 保留开头（来源标记在前），末尾标记截断
-        return result[:self.max_chars] + "\n...(结果过长已截断，可重新检索获取细节)"
+        # 保留开头，截断提示必须包含总量——模型据此判断是否需要重新获取
+        total = len(result)
+        return (
+            result[:self.max_chars]
+            + f"\n...(结果已截断：共 {total} 字符，仅显示前 {self.max_chars}。"
+            + "如需完整内容，请重新调用工具获取)"
+        )
 
     def should_compact(self, messages: list) -> bool:
         # 预留：本次不触发消息历史压缩（避免过度设计）

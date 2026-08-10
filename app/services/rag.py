@@ -47,6 +47,7 @@ class RagService:
             temperature=0.2,
             think=settings.llm_think,
             max_tokens=settings.llm_max_tokens,
+            num_ctx=settings.llm_num_ctx,
         )
 
     # ──────────────────────────────────────────

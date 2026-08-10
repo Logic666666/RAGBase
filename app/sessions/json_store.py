@@ -10,6 +10,7 @@
 
 import json
 import os
+import shutil
 import time
 from dataclasses import asdict
 
@@ -77,3 +78,33 @@ class JsonSessionStore(SessionStore):
         # 按创建时间倒序（最新的在前）
         records.sort(key=lambda r: r.created_at, reverse=True)
         return records
+
+    async def delete(self, session_id: str) -> None:
+        """删除会话记录文件及其工作区目录（笔记等）"""
+        path = self._path(session_id)
+        if os.path.exists(path):
+            os.remove(path)
+        # 会话工作区目录（笔记）：data/sessions/{session_id}/
+        ws_dir = os.path.join(self.sessions_dir, session_id)
+        if os.path.isdir(ws_dir):
+            shutil.rmtree(ws_dir, ignore_errors=True)
+
+    async def cleanup(self, max_sessions: int) -> int:
+        """
+        保留最近 max_sessions 个会话，删除更旧的。
+
+        按创建时间（created_at）而非文件 mtime 判定新旧——
+        避免 Claude Code 的已知坑：文件 mtime 被备份/同步重置
+        导致新会话被误删（Issue #62250）。
+
+        Returns:
+            删除的会话数量
+        """
+        records = await self.list()  # 已按创建时间倒序
+        if len(records) <= max_sessions:
+            return 0
+        removed = 0
+        for record in records[max_sessions:]:
+            await self.delete(record.session_id)
+            removed += 1
+        return removed

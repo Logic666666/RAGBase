@@ -111,6 +111,11 @@ class Agent:
                 # 前端需要从 llm 事件解析 thought 字段和工具调用 JSON
                 self._trace("llm", response)
 
+                # 记录结束原因（诊断输出截断的关键）：
+                # done_reason = "length" 说明达到 num_predict 上限（输出被截断）
+                if chat_response.done_reason != "stop":
+                    self._trace("llm_done", f"done_reason={chat_response.done_reason}")
+
                 # 2b. 解析输出
                 tool_call = parse_tool_call(response)
 

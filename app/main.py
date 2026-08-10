@@ -161,6 +161,7 @@ def build_agent(settings: Settings, kb: str, session_id: str) -> Agent:
         temperature=0.2,
         think=settings.llm_think,
         max_tokens=settings.llm_max_tokens,
+        num_ctx=settings.llm_num_ctx,
     )
     return Agent(llm=llm, tools=registry, tracer=Tracer())
 
@@ -212,6 +213,46 @@ async def agent_run(
     return {"session_id": session_id, "status": "running"}
 
 
+@app.get("/agent/sessions")
+async def agent_sessions(
+    manager: SessionManager = Depends(get_session_manager),
+):
+    """
+    列出所有历史会话（按创建时间倒序）。
+
+    追溯入口：用户可通过 session_id 回看任意一次研究的
+    完整 trace（GET /agent/result/{session_id}）。
+    """
+    records = await manager.list_sessions()
+    return {
+        "items": [
+            {
+                "session_id": r.session_id,
+                "status": r.status.value,
+                "task": r.task[:100],       # 截断，列表轻量
+                "kb": r.kb,
+                "completed": r.completed,
+                "steps": r.steps,
+                "created_at": r.created_at,
+            }
+            for r in records
+        ]
+    }
+
+
+@app.delete("/agent/sessions/{session_id}")
+async def delete_session(
+    session_id: str,
+    manager: SessionManager = Depends(get_session_manager),
+):
+    """删除历史会话（记录 + 工作区数据）"""
+    record = await manager.get_status(session_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
+    await manager.delete_session(session_id)
+    return {"deleted": session_id}
+
+
 @app.get("/agent/status/{session_id}")
 async def agent_status(
     session_id: str,
@@ -245,6 +286,7 @@ async def agent_result(
     return {
         "session_id": record.session_id,
         "status": record.status.value,
+        "task": record.task,           # 任务原文（历史会话查看时展示用户问题）
         "answer": record.result,
         "completed": record.completed,
         "reason": record.reason,

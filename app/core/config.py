@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     llm_think: bool = True if os.getenv("LLM_THINK", "true").lower() == "true" else False
     # 单次生成的最大 token 数；None 或空值表示不限制
     llm_max_tokens: Optional[int] = None
+    # 上下文窗口大小（token）：Agent 的消息历史（system + 工具调用 + 结果）
+    llm_num_ctx: int = int(os.getenv("LLM_NUM_CTX", "8192"))
 
     @field_validator("llm_max_tokens", mode="before")
     @classmethod

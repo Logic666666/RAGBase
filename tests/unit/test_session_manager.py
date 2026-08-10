@@ -96,6 +96,105 @@ async def test_status_nonexistent(tmp_path):
     assert await manager.get_status("ghost") is None
 
 
+@pytest.mark.asyncio
+async def test_list_sessions(tmp_path):
+    """历史会话列表（按创建时间倒序）"""
+    store = JsonSessionStore(str(tmp_path / "sessions"))
+    manager = SessionManager(store=store, agent_builder=make_agent_builder(FakeAgent("x")))
+    await manager.submit(kb="test", task="任务1", max_steps=5, settings=None)
+    await asyncio.sleep(0.05)
+    await manager.submit(kb="test", task="任务2", max_steps=5, settings=None)
+
+    sessions = await manager.list_sessions()
+    assert len(sessions) == 2
+    assert sessions[0].task == "任务2"  # 最新的在前
+
+
+@pytest.mark.asyncio
+async def test_failed_session_keeps_trace(tmp_path):
+    """失败会话也应保留 trace（可复盘失败前执行到哪一步）"""
+    store = JsonSessionStore(str(tmp_path / "sessions"))
+    agent = FakeAgent(result="", delay=0.01, fail=True)
+    agent.tracer = None  # 无 tracer 时不应报错
+    manager = SessionManager(store=store, agent_builder=make_agent_builder(agent))
+
+    session_id = await manager.submit(kb="test", task="失败任务", max_steps=5, settings=None)
+
+    for _ in range(50):
+        record = await manager.get_status(session_id)
+        if record.status == SessionStatus.FAILED:
+            break
+        await asyncio.sleep(0.02)
+
+    assert record.status == SessionStatus.FAILED
+    assert "RuntimeError" in record.error
+
+
+@pytest.mark.asyncio
+async def test_delete_session(tmp_path):
+    """手动删除会话：记录文件 + 工作区一起清理"""
+    store = JsonSessionStore(str(tmp_path / "sessions"))
+    manager = SessionManager(store=store, agent_builder=make_agent_builder(FakeAgent("x")))
+
+    session_id = await manager.submit(kb="test", task="任务", max_steps=5, settings=None)
+    # 等待完成，确保文件落盘
+    for _ in range(50):
+        record = await manager.get_status(session_id)
+        if record.status != SessionStatus.RUNNING:
+            break
+        await asyncio.sleep(0.02)
+
+    assert await manager.get_status(session_id) is not None
+    await manager.delete_session(session_id)
+    assert await manager.get_status(session_id) is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_retains_most_recent(tmp_path):
+    """保留策略：超出上限时删除最旧的，保留最新的"""
+    store = JsonSessionStore(str(tmp_path / "sessions"))
+    manager = SessionManager(store=store, agent_builder=make_agent_builder(FakeAgent("x")),
+                             max_sessions=2)
+
+    # 连续提交 3 个会话
+    ids = []
+    for i in range(3):
+        sid = await manager.submit(kb="test", task=f"任务{i}", max_steps=5, settings=None)
+        ids.append(sid)
+        await asyncio.sleep(0.05)  # 错开创建时间
+
+    sessions = await manager.list_sessions()
+    assert len(sessions) == 2  # 保留上限 2
+    remaining = {s.session_id for s in sessions}
+    # 最新的两个保留，最旧的被清理
+    assert ids[0] not in remaining
+    assert ids[1] in remaining and ids[2] in remaining
+
+
+@pytest.mark.asyncio
+async def test_failed_session_with_tracer_keeps_trace(tmp_path):
+    """带 tracer 的 Agent 失败时，trace 应随会话保存"""
+    from app.observability.tracer import Tracer
+
+    store = JsonSessionStore(str(tmp_path / "sessions"))
+    agent = FakeAgent(result="", delay=0.01, fail=True)
+    agent.tracer = Tracer()  # 有 tracer
+    agent.tracer.record("start", "任务开始")
+    manager = SessionManager(store=store, agent_builder=make_agent_builder(agent))
+
+    session_id = await manager.submit(kb="test", task="失败任务", max_steps=5, settings=None)
+
+    for _ in range(50):
+        record = await manager.get_status(session_id)
+        if record.status == SessionStatus.FAILED:
+            break
+        await asyncio.sleep(0.02)
+
+    assert record.status == SessionStatus.FAILED
+    assert record.trace is not None
+    assert record.trace["event_count"] >= 1
+
+
 def test_get_session_manager_is_singleton():
     """
     会话管理器必须是进程级单例。

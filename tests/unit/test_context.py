@@ -25,17 +25,19 @@ def test_short_result_unchanged():
     assert compressor.compress_tool_result(result) == result
 
 
-def test_long_result_truncated():
-    """超长结果截断，保留开头（来源标记在前）"""
+def test_long_result_truncated_with_total():
+    """超长结果截断，保留开头且提示必须包含总量（模型判断是否需要重取）"""
     compressor = TrimCompressor(max_chars=50)
     result = "[1] (path/to/doc.md)\n" + "内容" * 100
     compressed = compressor.compress_tool_result(result)
 
-    assert len(compressed) <= 50 + len("\n...(结果过长已截断，可重新检索获取细节)")
+    assert len(compressed) <= 50 + 100  # 截断 + 提示语
     # 来源标记保留（可追溯、可重查）
     assert "[1] (path/to/doc.md)" in compressed
-    # 截断标记存在
+    # 截断提示包含总量（模型据此判断完整性）
     assert "已截断" in compressed
+    assert "共 " in compressed
+    assert str(len(result)) in compressed  # 总量数字
 
 
 def test_source_path_preserved():
@@ -44,6 +46,17 @@ def test_source_path_preserved():
     result = "[1] (docs/arch.md)\n架构设计文档内容很长很长很长很长"
     compressed = compressor.compress_tool_result(result)
     assert "[1] (docs/arch.md)" in compressed
+
+
+def test_large_threshold_keeps_file_list():
+    """
+    兜底阈值足够大：文件列表（约 2KB）不应被截断——
+    结构化信息（路径）截断会导致模型看不到完整项目结构。
+    """
+    compressor = TrimCompressor()  # 默认 8000
+    file_list = "\n".join(f"src/module_{i}/file_{i}.py" for i in range(73))
+    assert len(file_list) < 8000
+    assert compressor.compress_tool_result(file_list) == file_list
 
 
 def test_should_compact_preview():

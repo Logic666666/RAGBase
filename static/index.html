@@ -406,6 +406,52 @@
     }
     .kb-empty svg { margin-bottom: 8px; opacity: .4; }
 
+    /* 历史会话 */
+    .session-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .session-list { display: flex; flex-direction: column; gap: 6px; }
+    .session-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: var(--radius);
+      border: 1.5px solid var(--border);
+      cursor: pointer;
+      font-size: .78rem;
+      transition: var(--transition);
+    }
+    .session-item:hover { border-color: var(--primary); background: var(--primary-light); }
+    .session-status {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .session-status.done { background: var(--success); }
+    .session-status.failed { background: var(--error); }
+    .session-status.running { background: var(--warning); animation: pulse 1.2s infinite; }
+    .session-task {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+    }
+    .session-del {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: .72rem;
+      padding: 2px 5px;
+      border-radius: 4px;
+      flex-shrink: 0;
+    }
+    .session-del:hover { color: var(--error); background: var(--error-bg); }
+
     /* 模式切换（分段控件） */
     .mode-switch {
       display: inline-flex;
@@ -696,6 +742,17 @@
             </svg>
             <p>暂无知识库<br/>在上方创建第一个</p>
           </div>
+        </div>
+      </div>
+
+      <!-- 历史会话（可追溯） -->
+      <div class="field" style="margin-top:16px;">
+        <div class="session-header" onclick="toggleSessions()">
+          <label class="field-label" style="margin-bottom:0;cursor:pointer;">历史会话</label>
+          <span id="sessionToggleIcon" style="font-size:.7rem;color:var(--text-muted);cursor:pointer;">▼</span>
+        </div>
+        <div id="sessionList" class="session-list" style="margin-top:8px;">
+          <div class="kb-empty">暂无历史会话</div>
         </div>
       </div>
     </div>
@@ -1225,6 +1282,7 @@
       const srcs = extractSourcesFromTrace(j.trace?.events || []);
       addAgentMessage(renderAgentFlow(j.trace?.events || [], j.answer, srcs,
         j.trace?.total_duration_ms || null, j.completed, j.reason));
+      loadSessions();  // 任务完成，刷新历史会话列表
       if (!j.completed) {
         toast('任务未完全完成（步数限制）', 'info');
       }
@@ -1374,6 +1432,71 @@
   }
 
   // ====================================
+  // 历史会话管理
+  // ====================================
+  function toggleSessions() {
+    const list = document.getElementById('sessionList');
+    const icon = document.getElementById('sessionToggleIcon');
+    list.style.display = list.style.display === 'none' ? 'flex' : 'none';
+    icon.textContent = list.style.display === 'none' ? '▶' : '▼';
+  }
+
+  async function loadSessions() {
+    try {
+      const res = await fetch('/agent/sessions');
+      const j = await res.json();
+      const items = j.items || [];
+      const list = document.getElementById('sessionList');
+      if (!items.length) {
+        list.innerHTML = '<div class="kb-empty">暂无历史会话</div>';
+        return;
+      }
+      list.innerHTML = items.map(s => `
+        <div class="session-item" onclick="viewSession('${s.session_id}')" title="查看本次研究过程">
+          <span class="session-status ${s.status}"></span>
+          <span class="session-task">${esc(s.task)}</span>
+          <button class="session-del" onclick="event.stopPropagation();deleteSession('${s.session_id}')" title="删除">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      `).join('');
+    } catch (e) { /* 静默：历史列表加载失败不影响主功能 */ }
+  }
+
+  async function deleteSession(sessionId) {
+    if (!confirm('确定删除该历史会话吗？此操作不可恢复。')) return;
+    try {
+      const res = await fetch(`/agent/sessions/${sessionId}`, { method: 'DELETE' });
+      if (res.ok) {
+        toast('会话已删除', 'success');
+        loadSessions();
+      } else {
+        toast('删除失败', 'error');
+      }
+    } catch (e) {
+      toast('网络错误', 'error');
+    }
+  }
+
+  async function viewSession(sessionId) {
+    try {
+      const res = await fetch(`/agent/result/${sessionId}`);
+      const j = await res.json();
+      if (!res.ok || !j.answer) {
+        toast(j.detail || '获取会话失败', 'error');
+        return;
+      }
+      // 把历史会话渲染到对话流（用户问题 + 完整 Agent 流程）
+      addUserMessage(j.task || '（历史会话）');
+      const srcs = extractSourcesFromTrace(j.trace?.events || []);
+      addAgentMessage(renderAgentFlow(j.trace?.events || [], j.answer, srcs,
+        j.trace?.total_duration_ms || null, j.completed, j.reason));
+    } catch (e) {
+      toast('网络错误', 'error');
+    }
+  }
+
+  // ====================================
   // 输入框交互：Enter 发送、Shift+Enter 换行、自动增高
   // ====================================
   const qInput = document.getElementById('question');
@@ -1403,6 +1526,7 @@
   });
 
   loadKbs();
+  loadSessions();
 </script>
 </body>
 </html>
