@@ -85,3 +85,76 @@ def test_truncated_json_repaired():
     assert result is not None
     assert result.tool == "read_file"
     assert result.arguments == {"path": "main.py"}
+
+
+def test_bare_quotes_in_string_repaired():
+    """
+    字符串值内部的裸引号（模型忘记转义）应被修复。
+    真实案例：thought 里写 查找"microservice" 而未转义，json.loads 直接失败。
+    """
+    text = (
+        '{"thought": "查找"microservice"或"containerization"相关关键词。", '
+        '"tool": "grep_code", "arguments": {"pattern": "micro"}}'
+    )
+    result = parse_tool_call(text)
+    assert result is not None
+    assert result.tool == "grep_code"
+    assert result.arguments == {"pattern": "micro"}
+    # thought 修复后保留内容（裸引号 → 中文引号）
+    assert "microservice" in result.thought
+
+
+def test_escaped_quotes_not_damaged():
+    """合法的转义引号 \\" 不应被修复逻辑破坏"""
+    text = '{"thought": "他说 \\"你好\\"", "tool": "search_kb", "arguments": {"query": "x"}}'
+    result = parse_tool_call(text)
+    assert result is not None
+    assert result.tool == "search_kb"
+    assert "你好" in result.thought
+
+
+def test_tool_field_as_nested_object():
+    """
+    模型把 tool 字段写成嵌套对象（误解调用示例结构）时，
+    应提取 name 和嵌套的 arguments。
+    真实案例：{"tool": {"name": "grep_code", "arguments": {...}}}。
+    """
+    text = (
+        '{"thought": "grep_code 工具可用", '
+        '"tool": {"name": "grep_code", "arguments": {"pattern": "micro"}}}'
+    )
+    result = parse_tool_call(text)
+    assert result is not None
+    assert result.tool == "grep_code"
+    assert result.arguments == {"pattern": "micro"}
+
+
+def test_nested_object_truncated_json():
+    """
+    嵌套 tool 对象 + 截断 JSON 的组合修复：
+    内部有 } 不应干扰截断检测（真实 session 案例）。
+    """
+    text = (
+        '{"thought": "grep_code 工具不可用", '
+        '"tool": {"name": "search_kb", "arguments": {"query": "微服务"}}'
+    )
+    result = parse_tool_call(text)
+    assert result is not None
+    assert result.tool == "search_kb"
+    assert result.arguments == {"query": "微服务"}
+
+
+def test_missing_key_tool_call_extracted():
+    """
+    模型把整个工具调用对象误嵌为外层值（缺键名）时，
+    用正则提取内部完整的 {"tool": ..., "arguments": {...}}。
+    真实案例："thought": "...", {"tool": "search_kb", "arguments": {...}}。
+    """
+    text = (
+        '{"thought": "需要先检索技术文档", '
+        '{"tool": "search_kb", "arguments": {"query": "架构设计"}}}'
+    )
+    result = parse_tool_call(text)
+    assert result is not None
+    assert result.tool == "search_kb"
+    assert result.arguments == {"query": "架构设计"}

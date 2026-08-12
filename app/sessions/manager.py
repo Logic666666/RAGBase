@@ -114,8 +114,10 @@ class SessionManager:
         """
         agent = None
         try:
-            # 传 session_id：build_agent 用它创建按会话隔离的工作区
-            agent = self.agent_builder(settings, record.kb, record.session_id)
+            # 传 session_id + max_steps：build_agent 用它创建工作区并设置步数上限
+            agent = self.agent_builder(
+                settings, record.kb, record.session_id, record.max_steps
+            )
             result = await agent.run(record.task)
 
             await self.store.update(record.session_id, {

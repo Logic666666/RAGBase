@@ -1304,7 +1304,18 @@
     let pendingTool = null; // 等下一个 tool_result 一起渲染（用它的耗时）
 
     for (const e of events || []) {
-      if (e.event === 'think') {
+      if (e.event === 'plan') {
+        // 研究计划（规划轮输出）：展示为可展开块
+        if (e.detail) {
+          html += `<div class="tl-thought" onclick="this.classList.toggle('open')">
+            <div class="tl-thought-header">
+              <span class="tl-thought-arrow">▶</span>
+              <span>研究计划</span>
+            </div>
+            <div class="tl-thought-body">${esc(e.detail)}</div>
+          </div>`;
+        }
+      } else if (e.event === 'think') {
         // 模型推理过程（来自 Ollama message.thinking 或 <think> 标签）
         // 渲染为可展开的 Thought 块，展示完整思考内容
         if (e.detail) {

@@ -51,6 +51,22 @@ async def test_grep_no_match(codebase):
 
 
 @pytest.mark.asyncio
+async def test_grep_no_match_shows_file_structure(codebase):
+    """
+    grep 无结果时返回按目录分组的文件结构，
+    引导模型按文件名选择文件直接阅读（不依赖模型自觉）。
+    """
+    tool = GrepCodeTool(codebase)
+    result = await tool.run("不存在的符号xyz")
+    # 包含文件结构提示和文件名
+    assert "项目文件结构" in result
+    assert "src/" in result
+    assert "main.py" in result
+    # 明确引导 read_file
+    assert "read_file" in result
+
+
+@pytest.mark.asyncio
 async def test_grep_limits_results(codebase):
     tool = GrepCodeTool(codebase)
     result = await tool.run("def |print|import", max_results=1)

@@ -127,7 +127,7 @@ async def chat(body: ChatBody, rag: RagService = Depends(get_rag_service)):
     return {"answer": answer, "sources": sources}
 
 
-def build_agent(settings: Settings, kb: str, session_id: str) -> Agent:
+def build_agent(settings: Settings, kb: str, session_id: str, max_steps: int = 5) -> Agent:
     """
     构建 Agent 实例。
 
@@ -163,7 +163,7 @@ def build_agent(settings: Settings, kb: str, session_id: str) -> Agent:
         max_tokens=settings.llm_max_tokens,
         num_ctx=settings.llm_num_ctx,
     )
-    return Agent(llm=llm, tools=registry, tracer=Tracer())
+    return Agent(llm=llm, tools=registry, tracer=Tracer(), max_steps=max_steps)
 
 
 @lru_cache

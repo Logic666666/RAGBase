@@ -92,15 +92,20 @@ class FakeKB(BaseTool):
 
 
 class ScriptedLLM:
-    """先调用工具，再回答的 mock LLM"""
+    """先规划，再调用工具，再回答的 mock LLM"""
 
     def __init__(self):
-        self.calls = []
+        self.chat_calls = []   # 规划轮
+        self.llm_calls = []    # ReAct 循环
+
+    async def chat(self, messages):
+        self.chat_calls.append(messages)
+        return '{"plan": [{"dimension": "架构", "keywords": ["架构"]}]}'
 
     async def chat_with_response(self, messages):
         from app.infrastructure.llm_client import ChatResponse
-        self.calls.append(messages)
-        if len(self.calls) == 1:
+        self.llm_calls.append(messages)
+        if len(self.llm_calls) == 1:
             return ChatResponse(content='{"tool": "search_kb", "arguments": {"query": "架构"}}')
         return ChatResponse(content="回答完毕。")
 
@@ -117,8 +122,8 @@ async def test_tool_result_compressed_in_history():
                   compressor=TrimCompressor(max_chars=100))
     await agent.run("分析项目架构")
 
-    # 第二次 LLM 调用时，消息历史里的工具结果应是压缩后的
-    history = llm.calls[1]
+    # 第二次循环调用时，消息历史里的工具结果应是压缩后的
+    history = llm.llm_calls[1]
     tool_msg = next(m for m in history if m.role == "user" and m.content.startswith("[工具结果"))
     assert "已截断" in tool_msg.content
     assert len(tool_msg.content) < 300  # 原始结果 1500+ 字符 → 压缩到 ~100

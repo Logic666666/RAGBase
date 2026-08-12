@@ -20,10 +20,13 @@ Agent 循环（ReAct Orchestrator）
   - 每一步都可通过 Tracer 记录（可观测）
 """
 
+import json
+
 from ..infrastructure.llm_client import Message, OllamaChatClient
+from ..tools.base import ToolResult
 from ..tools.registry import ToolRegistry
 from .context import ContextCompressor, TrimCompressor
-from .prompts import system_prompt
+from .prompts import PLANNING_PROMPT, system_prompt
 from .schemas import AgentResult, parse_tool_call
 
 
@@ -85,13 +88,28 @@ class Agent:
         """
         self._trace("start", task)
 
-        # 1. 构建消息历史
+        # 1. 规划轮：生成研究计划作为上下文锚点
+        # （对齐 Claude Code 的 plan mode：研究先行、执行在后）
+        # 计划不强制解析为结构化数据——直接作为文本锚点，
+        # 模型在后续循环中始终能看到"我要研究哪些维度"。
+        plan = await self._plan(task)
+        self._trace("plan", plan)
+
+        # 2. 构建消息历史（研究计划作为 system 消息锚点）
         messages: list[Message] = [
             Message(role="system", content=system_prompt(self.tools.schemas())),
+            Message(role="system", content=f"研究计划：\n{plan}"),
             Message(role="user", content=task),
         ]
 
         parse_failures = 0
+        # 收敛检测（对齐 Claude Code 的 convergence detection——Issue #30150：
+        #   模型重复相同工具调用/输出导致死循环无进展）
+        # 1) 工具级：记录已用过的 (tool, arguments)，拦截重复工具调用
+        seen_calls: set[tuple[str, str]] = set()
+        # 2) 响应级：记录上一轮 LLM 输出，拦截"复读自身"（echo mode——
+        #    小模型在循环中复制自己上一轮的整段输出，工具级检测拦不住）
+        last_response: str | None = None
 
         # 2. 循环（try/finally 保证任何退出路径都保存 transcript）
         try:
@@ -116,6 +134,31 @@ class Agent:
                 if chat_response.done_reason != "stop":
                     self._trace("llm_done", f"done_reason={chat_response.done_reason}")
 
+                # 响应级收敛检测：输出与上一轮逐字相同 → 模型在复读自己（无进展）
+                if last_response is not None and response == last_response:
+                    result = ToolResult.error(
+                        "你刚才的输出与上一轮完全相同，说明没有进展。"
+                        "请改变策略，或基于已有信息直接输出最终回答。"
+                    )
+                    self._trace("tool_result", result.content)
+                    parse_failures += 1
+                    if parse_failures >= self.max_parse_failures:
+                        self._trace("give_up", "连续无进展，终止循环")
+                        return AgentResult(
+                            answer="Agent 连续输出相同内容（无进展），任务未能完成。"
+                                   f"最后一次错误: {result.content[:200]}",
+                            completed=False,
+                            steps=step + 1,
+                            reason="tool_errors",
+                        )
+                    # 写回消息历史后继续循环
+                    messages.append(Message(role="assistant", content=response))
+                    messages.append(
+                        Message(role="user", content=f"[工具错误]\n{result.content}")
+                    )
+                    continue
+                last_response = response
+
                 # 2b. 解析输出
                 tool_call = parse_tool_call(response)
 
@@ -127,7 +170,22 @@ class Agent:
                 # 2c. 执行工具
                 # 记录工具名和参数（前端展示为工具调用行）
                 self._trace("tool_call", f"{tool_call.tool} {tool_call.arguments}")
-                result = await self.tools.execute(tool_call.tool, tool_call.arguments)
+
+                # 收敛检测：相同 (工具, 参数) 重复调用 → 提示换关键词/换工具
+                call_key = (
+                    tool_call.tool,
+                    json.dumps(tool_call.arguments, sort_keys=True, ensure_ascii=False),
+                )
+                if call_key in seen_calls:
+                    # 只报事实，不引导具体工具（工具选择依据见系统提示中的工具选择指南）
+                    result = ToolResult.error(
+                        f"重复调用：你已用相同参数调用过 {tool_call.tool}，"
+                        f"反复相同调用不会产生新结果。"
+                        f"请参照工具选择指南更换策略后重试。"
+                    )
+                else:
+                    seen_calls.add(call_key)
+                    result = await self.tools.execute(tool_call.tool, tool_call.arguments)
                 self._trace("tool_result", result.content)
 
                 # 上下文管理：工具结果进入消息历史前裁剪
@@ -183,6 +241,36 @@ class Agent:
                 {"role": m.role, "content": m.content}
                 for m in messages
             ]
+
+    # ──────────────────────────────────────────
+    # 内部：规划轮
+    # ──────────────────────────────────────────
+
+    async def _plan(self, task: str) -> str:
+        """
+        规划轮：生成研究计划。
+
+        对齐 Claude Code 的 "Explore → plan → code"：
+        先探索项目结构（list_files），再基于实际内容规划维度——
+        避免"空规划"（模型不了解代码库，按用户问题的关键词猜维度，
+        而实际代码库可能完全没有这些内容）。
+
+        计划不强制 JSON 解析（小模型输出不稳定）——
+        直接作为文本锚点使用，模型自己理解。
+        """
+        # 先探索：获取项目文件结构（若工具不可用则降级为无结构）
+        structure = "（无法获取项目结构）"
+        if self.tools.get("list_files") is not None:
+            structure = await self.tools.execute("list_files", {"pattern": "*"})
+
+        response = await self.llm.chat([
+            Message(role="system", content=PLANNING_PROMPT),
+            Message(
+                role="user",
+                content=f"项目文件结构：\n{structure}\n\n研究主题：{task}",
+            ),
+        ])
+        return response.strip()
 
     # ──────────────────────────────────────────
     # 内部：Trace 记录

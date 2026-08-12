@@ -84,8 +84,34 @@ class GrepCodeTool(BaseTool):
                 break
 
         if not matches:
-            return f"未找到匹配 '{pattern}' 的内容。可尝试更换关键词或使用 list_files 查看文件列表。"
+            # 无结果时给出"按目录分组的文件清单"：
+            # 文件名/目录名本身携带语义（profiling→性能、config→配置），
+            # 模型据此选择相关文件直接阅读——不依赖模型自觉猜测。
+            return (
+                f"未找到匹配 '{pattern}' 的内容。\n\n"
+                f"请根据以下项目文件结构，选择与需求相关的文件直接 read_file 阅读：\n"
+                f"{self._file_structure()}"
+            )
         return "\n".join(matches)
+
+    def _file_structure(self, max_per_dir: int = 8) -> str:
+        """按目录分组列出文件（供 grep 无结果时引导阅读）"""
+        dirs: dict[str, list[str]] = {}
+        for root, _, fns in os.walk(self.codebase_dir):
+            if any(part in root for part in (".git", "__pycache__", "node_modules")):
+                continue
+            rel = os.path.relpath(root, self.codebase_dir)
+            label = "." if rel == "." else rel.replace(os.sep, "/")
+            dirs.setdefault(label, [])
+            for fn in sorted(fns):
+                if len(dirs[label]) < max_per_dir:
+                    dirs[label].append(fn)
+
+        lines = []
+        for d in sorted(dirs):
+            files = ", ".join(dirs[d])
+            lines.append(f"  {d}/: {files}" + ("..." if len(dirs[d]) == max_per_dir else ""))
+        return "\n".join(lines)
 
 
 class ReadFileTool(BaseTool):

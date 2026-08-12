@@ -39,23 +39,27 @@ class ScriptedLLM:
     """
     按脚本输出回复的 mock LLM。
 
-    scripts: 每次调用按顺序返回对应文本。
-    同时实现 chat 与 chat_with_response（orchestrator 使用后者）。
+    - chat()：规划轮固定返回 plan（Agent.run 开头调用）
+    - chat_with_response()：ReAct 循环按 scripts 顺序返回
+    两种调用分别记录（chat_calls / llm_calls），索引互不干扰。
     """
 
-    def __init__(self, scripts: list[str], thinking: str = ""):
+    def __init__(self, scripts: list[str], thinking: str = "",
+                 plan: str = '{"plan": [{"dimension": "技术方案", "keywords": ["架构"]}]}'):
         self.scripts = scripts
-        self.calls: list = []
         self.thinking = thinking  # 可选的思考内容，验证 think 事件传递
+        self.plan = plan
+        self.chat_calls: list = []   # 规划轮调用
+        self.llm_calls: list = []    # ReAct 循环调用
 
     async def chat(self, messages):
-        self.calls.append(messages)
-        return self.scripts[min(len(self.calls) - 1, len(self.scripts) - 1)]
+        self.chat_calls.append(messages)
+        return self.plan
 
     async def chat_with_response(self, messages):
         from app.infrastructure.llm_client import ChatResponse
-        self.calls.append(messages)
-        idx = min(len(self.calls) - 1, len(self.scripts) - 1)
+        self.llm_calls.append(messages)
+        idx = min(len(self.llm_calls) - 1, len(self.scripts) - 1)
         return ChatResponse(
             content=self.scripts[idx],
             thinking=self.thinking if idx == 0 else "",
@@ -92,7 +96,7 @@ async def test_react_loop_completes(registry):
 async def test_message_history_structure(registry):
     """
     消息历史应包含：
-    system → user(任务) → assistant(工具调用) → user(工具结果)
+    system(规则) → system(研究计划) → user(任务) → assistant(工具调用) → user(工具结果)
     """
     llm = ScriptedLLM([
         '{"tool": "search_kb", "arguments": {"query": "数据库"}}',
@@ -101,13 +105,35 @@ async def test_message_history_structure(registry):
     agent = Agent(llm=llm, tools=registry, max_steps=5)
     await agent.run("测试任务")
 
-    history = llm.calls[1]
+    history = llm.llm_calls[0]
     roles = [m.role for m in history]
-    assert roles == ["system", "user", "assistant", "user"]
+    assert roles == ["system", "system", "user", "assistant", "user"]
+
+    # 第二条 system 是研究计划锚点
+    assert "研究计划" in history[1].content
 
     # 工具结果以 [工具结果 xxx] 前缀写回
     assert "[工具结果 search_kb]" in history[-1].content
     assert "关于 数据库 的内容" in history[-1].content
+
+
+@pytest.mark.asyncio
+async def test_plan_round_recorded(registry):
+    """规划轮：研究计划进入消息历史 + trace 有 plan 事件"""
+    from app.observability.tracer import Tracer
+
+    llm = ScriptedLLM([
+        '{"tool": "search_kb", "arguments": {"query": "数据库"}}',
+        "回答完毕。",
+    ])
+    agent = Agent(llm=llm, tools=registry, max_steps=5, tracer=Tracer())
+    await agent.run("调研数据库方案")
+
+    # trace 有 plan 事件
+    events = [e.event for e in agent.tracer.events]
+    assert "plan" in events, f"缺少 plan 事件: {events}"
+    # 规划轮单独调用了一次 chat
+    assert len(llm.chat_calls) == 1
 
 
 @pytest.mark.asyncio
@@ -144,6 +170,64 @@ async def test_think_event_recorded(registry):
 
 
 @pytest.mark.asyncio
+async def test_duplicate_tool_call_detected(registry):
+    """
+    收敛检测：相同 (工具, 参数) 重复调用 → 返回"重复调用"错误，
+    不实际执行工具（防死循环/无进展烧 token）。
+    """
+    # thought 不同（输出不同，不触发响应级检测）但工具+参数相同
+    llm = ScriptedLLM([
+        '{"thought": "第一次搜索", "tool": "search_kb", "arguments": {"query": "数据库"}}',
+        '{"thought": "再试一次", "tool": "search_kb", "arguments": {"query": "数据库"}}',
+        "回答完毕。",
+    ])
+    agent = Agent(llm=llm, tools=registry, max_steps=5)
+    result = await agent.run("调研")
+
+    # 重复调用返回错误提示，模型看到后换策略
+    assert result.completed is True
+    # 第二次循环调用时，消息历史里应有"重复调用"错误
+    history = llm.llm_calls[1]
+    dup_msg = next(m for m in history if m.role == "user" and m.content.startswith("[工具错误"))
+    assert "重复调用" in dup_msg.content
+
+
+@pytest.mark.asyncio
+async def test_echo_mode_detected(registry):
+    """
+    响应级收敛检测：模型复读自身（每轮输出完全相同）→ 检测到无进展并终止。
+    工具级重复检测拦不住"整段复读"（thought 也相同），需要响应级拦截。
+    """
+    echo_output = '{"tool": "list_files", "arguments": {"pattern": "*"}}'
+    llm = ScriptedLLM([echo_output, echo_output, echo_output, echo_output])
+    agent = Agent(llm=llm, tools=registry, max_steps=5, max_parse_failures=3)
+
+    result = await agent.run("调研")
+
+    # 复读被检测为无进展 → 未完成（连续无进展终止）
+    assert result.completed is False
+    assert "无进展" in result.answer
+    assert result.reason == "tool_errors"
+
+
+@pytest.mark.asyncio
+async def test_different_args_not_duplicate(registry):
+    """不同参数的相同工具调用不算重复"""
+    llm = ScriptedLLM([
+        '{"tool": "search_kb", "arguments": {"query": "数据库"}}',
+        '{"tool": "search_kb", "arguments": {"query": "向量数据库"}}',  # 不同 query
+        "回答完毕。",
+    ])
+    agent = Agent(llm=llm, tools=registry, max_steps=5)
+    result = await agent.run("调研")
+
+    # 两次都正常执行（无重复错误）
+    assert result.completed is True
+    history = llm.llm_calls[1]
+    assert not any("重复调用" in m.content for m in history if m.role == "user")
+
+
+@pytest.mark.asyncio
 async def test_invalid_params_tolerance(registry):
     """
     模型持续传错参数 → 连续错误达到阈值后放弃。
@@ -158,5 +242,7 @@ async def test_invalid_params_tolerance(registry):
 
     result = await agent.run("任务")
 
+    # 连续相同输出被响应级收敛检测拦截（无进展）或参数错误，
+    # 最终达到阈值放弃——循环不无限跑
     assert result.completed is False
-    assert "连续出错" in result.answer or "工具" in result.answer
+    assert result.reason == "tool_errors"

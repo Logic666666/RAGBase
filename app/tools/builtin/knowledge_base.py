@@ -12,6 +12,8 @@
   因为用户在使用 Agent 前已经选好了知识库，每次传参是多余的。
 """
 
+import os
+
 from ...services.rag import RagService
 from ..base import BaseTool, ToolSpec
 
@@ -34,6 +36,9 @@ class KnowledgeBaseTool(BaseTool):
         """
         self.rag = rag_service
         self.kb_name = kb_name
+        # 连续命中代码文件的次数：达到阈值后本工具"自我拒绝"，
+        # 迫使模型查阅工具列表换工具（不点名其他工具，靠 description 自发现）
+        self._code_file_hits = 0
 
     @property
     def spec(self) -> ToolSpec:
@@ -95,16 +100,31 @@ class KnowledgeBaseTool(BaseTool):
         ]
         result = "\n\n".join(parts)
 
-        # 引导换工具：如果检索到的都是代码文件（.py/.java 等），
-        # 说明这是代码分析任务——向量检索对代码命中差，
-        # 明确提示模型改用 grep_code / read_file 分析实现。
-        # （小模型的工具选择能力弱，prompt 抽象规则不如具体提示有效）
+        # 事实反馈：检索结果中包含代码文件时如实告知——
+        # 不点名具体工具（工具选择依据见系统提示中的工具选择指南）
         code_exts = (".py", ".java", ".js", ".ts", ".go", ".cpp", ".c", ".h", ".rs")
-        if all(d["source"].lower().endswith(code_exts) for d in docs):
+        code_sources = [d["source"] for d in docs if d["source"].lower().endswith(code_exts)]
+
+        # 连续命中代码文件达到阈值 → 本工具"自我拒绝"：
+        # 说明该查询方向对文档检索无效，模型必须换工具（靠查阅工具列表自发现）。
+        # 这是工具对自身能力的声明，不点名其他工具。
+        if code_sources:
+            self._code_file_hits += 1
+            if self._code_file_hits >= 2:
+                return (
+                    "本工具（search_kb）已连续多次命中代码文件，"
+                    "它是文档检索工具，对代码分析无效。"
+                    "请停止使用本工具，查阅可用工具列表，"
+                    "选择适合代码分析的其他工具。"
+                )
             result += (
-                "\n\n[提示] 以上片段来自代码文件。"
-                "若要分析代码实现，请使用 grep_code 定位相关文件、"
-                "read_file 读取代码，而不是继续 search_kb。"
+                "\n\n[提示] 检索结果中包含代码文件（如 "
+                + ", ".join(os.path.basename(s) for s in code_sources[:2])
+                + "）。向量检索对代码文件的内容覆盖有限，"
+                "如需分析代码实现，请查阅可用工具列表选择合适工具。"
             )
+        else:
+            # 命中文档 → 重置计数（工具恢复可用）
+            self._code_file_hits = 0
 
         return result
