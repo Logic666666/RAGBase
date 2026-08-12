@@ -137,6 +137,43 @@ async def test_plan_round_recorded(registry):
 
 
 @pytest.mark.asyncio
+async def test_plan_explores_structure(registry):
+    """
+    规划轮的探索使用统一的 tool_call/tool_result 事件
+    （与主循环一致，不区分阶段——对齐 Claude Code）。
+    """
+    from app.observability.tracer import Tracer
+    from app.tools.builtin.codebase import ListFilesTool
+
+    # 注册 list_files 工具
+    import tempfile, os
+    tmp = tempfile.mkdtemp()
+    os.makedirs(os.path.join(tmp, "src"), exist_ok=True)
+    registry.register(ListFilesTool(tmp))
+
+    llm = ScriptedLLM([
+        '{"tool": "search_kb", "arguments": {"query": "数据库"}}',
+        "回答完毕。",
+    ])
+    agent = Agent(llm=llm, tools=registry, max_steps=5, tracer=Tracer())
+    await agent.run("调研数据库方案")
+
+    events = [e.event for e in agent.tracer.events]
+    # 规划前的探索是统一工具调用：tool_call(list_files) 先于 plan
+    assert "tool_call" in events
+    first_tool_call = next(i for i, e in enumerate(agent.tracer.events) if e.event == "tool_call")
+    plan_idx = events.index("plan")
+    assert first_tool_call < plan_idx, "探索工具调用应先于 plan"
+    # 工具调用 detail 明确展示工具名
+    assert "list_files" in agent.tracer.events[first_tool_call].detail
+
+    # 规划轮的消息里包含项目结构
+    assert len(llm.chat_calls) == 1
+    plan_prompt = llm.chat_calls[0][-1].content
+    assert "项目文件结构" in plan_prompt
+
+
+@pytest.mark.asyncio
 async def test_max_steps_truncation(registry):
     """模型持续调用工具（死循环）→ max_steps 截断"""
     llm = ScriptedLLM(['{"tool": "search_kb", "arguments": {"query": "x"}}'])
@@ -190,6 +227,39 @@ async def test_duplicate_tool_call_detected(registry):
     history = llm.llm_calls[1]
     dup_msg = next(m for m in history if m.role == "user" and m.content.startswith("[工具错误"))
     assert "重复调用" in dup_msg.content
+
+
+@pytest.mark.asyncio
+async def test_empty_tool_name_rejected(registry):
+    """
+    空工具名（模型生成退化：tool=""）应明确报错并计入失败计数，
+    不执行空工具。
+    """
+    llm = ScriptedLLM([
+        '{"thought": "调用工具", "tool": "", "arguments": {}}',  # 空 tool
+        "回答完毕。",
+    ])
+    agent = Agent(llm=llm, tools=registry, max_steps=5)
+    result = await agent.run("调研")
+
+    # 模型从错误中恢复，最终正常完成
+    assert result.completed is True
+    assert "回答完毕" in result.answer
+
+
+@pytest.mark.asyncio
+async def test_empty_tool_name_gives_up_after_limit(registry):
+    """空工具名持续出现 → 达到失败上限终止（不无限循环）"""
+    llm = ScriptedLLM([
+        '{"tool": "", "arguments": {}}',
+        '{"tool": "", "arguments": {}}',
+        '{"tool": "", "arguments": {}}',
+    ])
+    agent = Agent(llm=llm, tools=registry, max_steps=5, max_parse_failures=3)
+    result = await agent.run("调研")
+
+    assert result.completed is False
+    assert result.reason == "tool_errors"
 
 
 @pytest.mark.asyncio

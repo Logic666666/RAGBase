@@ -99,7 +99,7 @@ async def test_read_file_path_traversal_blocked(codebase):
     tool = ReadFileTool(codebase)
     # 尝试读取代码库外的文件
     result = await tool.run("../../secret.txt")
-    assert "非法路径" in result
+    assert "路径无效" in result
 
 
 @pytest.mark.asyncio
@@ -121,7 +121,7 @@ async def test_read_file_accepts_full_path(codebase):
 async def test_read_file_nonexistent(codebase):
     tool = ReadFileTool(codebase)
     result = await tool.run("no_such_file.py")
-    assert "文件不存在" in result
+    assert "路径无效" in result
 
 
 @pytest.mark.asyncio

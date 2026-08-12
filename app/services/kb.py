@@ -11,7 +11,7 @@ from ..infrastructure.text_splitter import split_text
 
 # 支持的文件扩展名集合，用于验证上传文件类型
 SUPPORTED_EXTS = {
-    ".txt", ".md", ".py", ".java", ".sql", ".json", ".csv"
+    ".txt", ".md", ".py", ".java", ".sql", ".json", ".csv", ".pdf"
 }
 
 
@@ -481,15 +481,25 @@ class KnowledgeBaseService:
         
         for p in paths:
             try:
-                # 读取文件内容，使用utf-8编码并忽略解码错误
-                with open(p, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
-                    
+                # PDF：用 pypdf 提取文本；其他文件：utf-8 读取
+                if p.lower().endswith(".pdf"):
+                    from pypdf import PdfReader
+                    reader = PdfReader(p)
+                    content = "\n".join(
+                        page.extract_text() or "" for page in reader.pages
+                    )
+                    # 清理孤立代理字符（pypdf 提取可能产生，
+                    # 无法 UTF-8 编码会导致 embedding 请求崩溃）
+                    content = content.encode("utf-8", errors="ignore").decode("utf-8")
+                else:
+                    with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+
                 # 将文本分块并添加元数据
                 for chunk in split_text(content):
                     texts.append(chunk)
                     metadatas.append({"source": p})
-                    
+
             except Exception:
                 # 忽略处理失败的文件
                 continue

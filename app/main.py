@@ -16,6 +16,7 @@ from .tools.registry import ToolRegistry
 from .tools.builtin.knowledge_base import KnowledgeBaseTool
 from .tools.builtin.codebase import GrepCodeTool, ReadFileTool, ListFilesTool
 from .tools.builtin.note_take import NoteTakeTool, ReadNoteTool, ListNotesTool
+from .tools.builtin.read_pdf import ReadPdfTool
 from .infrastructure.llm_client import OllamaChatClient
 from .observability.tracer import Tracer
 from .sessions import JsonSessionStore, SessionManager
@@ -150,6 +151,7 @@ def build_agent(settings: Settings, kb: str, session_id: str, max_steps: int = 5
     registry.register(KnowledgeBaseTool(rag, kb))
     registry.register(GrepCodeTool(codebase_dir))
     registry.register(ReadFileTool(codebase_dir))
+    registry.register(ReadPdfTool(codebase_dir))
     registry.register(ListFilesTool(codebase_dir))
     registry.register(NoteTakeTool(workspace))
     registry.register(ReadNoteTool(workspace))

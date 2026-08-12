@@ -18,6 +18,7 @@ import os
 import re
 
 from ..base import BaseTool, ToolSpec
+from ..path_utils import resolve_codebase_path
 
 
 class GrepCodeTool(BaseTool):
@@ -152,9 +153,9 @@ class ReadFileTool(BaseTool):
     async def run(self, path: str, max_chars: int = 4000) -> str:
         # 路径容错：兼容相对路径（src/main.py）和完整路径
         # （./data/kb/xxx/source/src/main.py——search_kb 返回的格式）
-        full_path = self._resolve_path(path)
+        full_path = resolve_codebase_path(self.codebase_dir, path)
         if full_path is None:
-            return f"非法路径: {path}（只能读取代码库内的文件）"
+            return f"路径无效: {path}（只能读取代码库内已存在的文件）"
         if not os.path.isfile(full_path):
             return f"文件不存在: {path}"
 
@@ -167,31 +168,6 @@ class ReadFileTool(BaseTool):
         # 带行号返回
         lines = content.splitlines()
         return "\n".join(f"{i+1:4d} | {line}" for i, line in enumerate(lines))
-
-    def _resolve_path(self, path: str) -> str | None:
-        """
-        解析文件路径（兼容两种格式），并校验在代码库根目录内。
-
-        格式 1（推荐）：相对路径，如 src/main.py
-        格式 2（容错）：完整路径，如 ./data/kb/xxx/source/src/main.py
-                        （search_kb 返回的 metadata.source 格式）
-
-        Returns:
-            解析后的绝对路径；不在代码库内返回 None
-        """
-        codebase_root = os.path.realpath(self.codebase_dir)
-
-        # 尝试 1：作为相对路径拼接
-        full = os.path.realpath(os.path.join(codebase_root, path))
-        if full.startswith(codebase_root):
-            return full
-
-        # 尝试 2：作为完整路径（已在代码库内）
-        full = os.path.realpath(path)
-        if full.startswith(codebase_root):
-            return full
-
-        return None
 
 
 class ListFilesTool(BaseTool):

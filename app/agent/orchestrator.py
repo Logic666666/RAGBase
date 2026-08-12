@@ -167,6 +167,31 @@ class Agent:
                     self._trace("final_answer", response)
                     return AgentResult(answer=response, completed=True, steps=step + 1)
 
+                # 空工具名 = 生成退化（模型输出无效 JSON）：
+                # 明确报错而非执行空工具，计入失败计数（最终收敛终止）
+                if not tool_call.tool:
+                    self._trace("tool_call", f"(空工具名) {response[:100]}")
+                    result = ToolResult.error(
+                        "工具名为空（JSON 格式异常）。"
+                        "请重新生成正确的工具调用，或基于已有信息直接输出最终回答。"
+                    )
+                    self._trace("tool_result", result.content)
+                    parse_failures += 1
+                    if parse_failures >= self.max_parse_failures:
+                        self._trace("give_up", "连续工具错误，终止循环")
+                        return AgentResult(
+                            answer="工具调用连续出错，任务未能完成。"
+                                   f"最后一次错误: {result.content[:200]}",
+                            completed=False,
+                            steps=step + 1,
+                            reason="tool_errors",
+                        )
+                    messages.append(Message(role="assistant", content=response))
+                    messages.append(
+                        Message(role="user", content=f"[工具错误]\n{result.content}")
+                    )
+                    continue
+
                 # 2c. 执行工具
                 # 记录工具名和参数（前端展示为工具调用行）
                 self._trace("tool_call", f"{tool_call.tool} {tool_call.arguments}")
@@ -261,7 +286,10 @@ class Agent:
         # 先探索：获取项目文件结构（若工具不可用则降级为无结构）
         structure = "（无法获取项目结构）"
         if self.tools.get("list_files") is not None:
-            structure = await self.tools.execute("list_files", {"pattern": "*"})
+            self._trace("tool_call", "list_files {'pattern': '*'}")
+            result = await self.tools.execute("list_files", {"pattern": "*"})
+            structure = result.content if result.ok else "（无法获取项目结构）"
+            self._trace("tool_result", structure[:500])
 
         response = await self.llm.chat([
             Message(role="system", content=PLANNING_PROMPT),
