@@ -107,10 +107,12 @@ async def test_message_history_structure(registry):
 
     history = llm.llm_calls[0]
     roles = [m.role for m in history]
-    assert roles == ["system", "system", "user", "assistant", "user"]
+    assert roles == ["system", "system", "system", "user", "assistant", "user"]
 
-    # 第二条 system 是研究计划锚点
-    assert "研究计划" in history[1].content
+    # 第二条 system 是项目文件结构锚点（已探索，防重复 list_files）
+    assert "项目文件结构" in history[1].content
+    # 第三条 system 是研究计划锚点
+    assert "研究计划" in history[2].content
 
     # 工具结果以 [工具结果 xxx] 前缀写回
     assert "[工具结果 search_kb]" in history[-1].content
@@ -260,6 +262,24 @@ async def test_empty_tool_name_gives_up_after_limit(registry):
 
     assert result.completed is False
     assert result.reason == "tool_errors"
+
+
+@pytest.mark.asyncio
+async def test_null_tool_name_rejected(registry):
+    """
+    模型输出 "tool": null（JSON null → "None"）→ 应被拦截，
+    不执行名为 "None" 的空工具。
+    """
+    llm = ScriptedLLM([
+        '{"thought": "调用工具", "tool": null, "arguments": {}}',  # null 工具名
+        "回答完毕。",
+    ])
+    agent = Agent(llm=llm, tools=registry, max_steps=5)
+    result = await agent.run("调研")
+
+    # 模型从错误中恢复，正常完成
+    assert result.completed is True
+    assert "回答完毕" in result.answer
 
 
 @pytest.mark.asyncio

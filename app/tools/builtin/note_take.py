@@ -85,7 +85,16 @@ class ReadNoteTool(BaseTool):
         )
 
     async def run(self, name: str) -> str:
-        return await self.workspace.read_note(name)
+        content = await self.workspace.read_note(name)
+        if "不存在" in content:
+            # 事实反馈：笔记不存在（模型可能编造了笔记名）
+            # 引导其基于已读文档直接写报告，而非继续读笔记
+            return (
+                f"笔记 '{name}' 不存在（你尚未保存过该笔记）。"
+                f"请基于已阅读的文档内容直接撰写报告，"
+                f"或使用 list_notes 查看实际有哪些笔记。"
+            )
+        return content
 
 
 class ListNotesTool(BaseTool):

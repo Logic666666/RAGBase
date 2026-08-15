@@ -1,9 +1,11 @@
+import asyncio
+import json
 import os
 from functools import lru_cache
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi import Depends
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional
@@ -21,6 +23,7 @@ from .infrastructure.llm_client import OllamaChatClient
 from .observability.tracer import Tracer
 from .sessions import JsonSessionStore, SessionManager
 from .workspace import FileWorkspace
+from .events import EventBus, InMemoryEventBus
 
 
 app = FastAPI(title="AI RAG Knowledge", version="0.1.0")
@@ -128,6 +131,15 @@ async def chat(body: ChatBody, rag: RagService = Depends(get_rag_service)):
     return {"answer": answer, "sources": sources}
 
 
+@lru_cache
+def get_event_bus() -> EventBus:
+    """
+    事件总线单例（进程级）。
+    Agent 步骤事件 → EventBus → SSE 推送给前端。
+    """
+    return InMemoryEventBus()
+
+
 def build_agent(settings: Settings, kb: str, session_id: str, max_steps: int = 5) -> Agent:
     """
     构建 Agent 实例。
@@ -165,7 +177,14 @@ def build_agent(settings: Settings, kb: str, session_id: str, max_steps: int = 5
         max_tokens=settings.llm_max_tokens,
         num_ctx=settings.llm_num_ctx,
     )
-    return Agent(llm=llm, tools=registry, tracer=Tracer(), max_steps=max_steps)
+    return Agent(
+        llm=llm,
+        tools=registry,
+        tracer=Tracer(),
+        max_steps=max_steps,
+        event_bus=get_event_bus(),
+        session_id=session_id,
+    )
 
 
 @lru_cache
@@ -253,6 +272,47 @@ async def delete_session(
         raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
     await manager.delete_session(session_id)
     return {"deleted": session_id}
+
+
+@app.get("/agent/events/{session_id}")
+async def agent_events(
+    session_id: str,
+    request: Request,
+    bus: EventBus = Depends(get_event_bus),
+):
+    """
+    实时事件流（SSE）：Agent 步骤事件逐步推送。
+
+    前端用 EventSource 订阅，增量渲染 thought/工具调用/结果。
+    事件类型：plan / think / llm / tool_call / tool_result / final_answer。
+
+    心跳：15 秒无事件发注释行，防止代理/网关空闲断连。
+    """
+    queue = bus.subscribe(session_id)
+
+    async def gen():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                except asyncio.TimeoutError:
+                    # 心跳（SSE 注释行）
+                    yield ": heartbeat\n\n"
+        finally:
+            bus.unsubscribe(session_id, queue)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/agent/status/{session_id}")

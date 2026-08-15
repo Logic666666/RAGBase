@@ -20,7 +20,9 @@ Agent 循环（ReAct Orchestrator）
   - 每一步都可通过 Tracer 记录（可观测）
 """
 
+import asyncio
 import json
+from typing import TYPE_CHECKING
 
 from ..infrastructure.llm_client import Message, OllamaChatClient
 from ..tools.base import ToolResult
@@ -28,6 +30,9 @@ from ..tools.registry import ToolRegistry
 from .context import ContextCompressor, TrimCompressor
 from .prompts import PLANNING_PROMPT, system_prompt
 from .schemas import AgentResult, parse_tool_call
+
+if TYPE_CHECKING:
+    from ..events.bus import EventBus
 
 
 class Agent:
@@ -46,6 +51,8 @@ class Agent:
         max_steps: int = 5,
         max_parse_failures: int = 3,
         compressor: ContextCompressor | None = None,
+        event_bus=None,
+        session_id: str = "",
     ):
         """
         Args:
@@ -56,6 +63,8 @@ class Agent:
             max_parse_failures: 连续解析失败的容忍次数（默认 2）
             compressor:      上下文压缩器（工具结果裁剪）。
                              默认 TrimCompressor，控制单轮结果占用
+            event_bus:       事件总线（实时推送步骤事件给前端，可选）
+            session_id:      会话标识（事件按会话隔离发布）
         """
         self.llm = llm
         self.tools = tools
@@ -63,6 +72,8 @@ class Agent:
         self.max_steps = max_steps
         self.max_parse_failures = max_parse_failures
         self.compressor = compressor or TrimCompressor()
+        self.event_bus = event_bus
+        self.session_id = session_id
         # 本次执行的消息历史（transcript）：
         # 运行结束后可读取（agent.history），
         # 由 SessionManager 落盘，支持恢复执行（resume）与追溯
@@ -88,16 +99,19 @@ class Agent:
         """
         self._trace("start", task)
 
-        # 1. 规划轮：生成研究计划作为上下文锚点
+        # 1. 规划轮：先探索项目结构，再生成研究计划作为上下文锚点
         # （对齐 Claude Code 的 plan mode：研究先行、执行在后）
-        # 计划不强制解析为结构化数据——直接作为文本锚点，
-        # 模型在后续循环中始终能看到"我要研究哪些维度"。
-        plan = await self._plan(task)
+        # 计划不强制解析为结构化数据，直接将文本作为锚点，
+        # 模型在后续循环中始终能看到需要研究的维度。
+        structure, plan = await self._plan(task)
         self._trace("plan", plan)
 
-        # 2. 构建消息历史（研究计划作为 system 消息锚点）
+        # 2. 构建消息历史：
+        #   探索结果 + 研究计划作为 system 消息锚点—
+        #   主循环模型能直接看到"项目结构已探索"，不会重复调 list_files
         messages: list[Message] = [
             Message(role="system", content=system_prompt(self.tools.schemas())),
+            Message(role="system", content=f"项目文件结构（已探索，无需重复查看）：\n{structure}"),
             Message(role="system", content=f"研究计划：\n{plan}"),
             Message(role="user", content=task),
         ]
@@ -169,7 +183,8 @@ class Agent:
 
                 # 空工具名 = 生成退化（模型输出无效 JSON）：
                 # 明确报错而非执行空工具，计入失败计数（最终收敛终止）
-                if not tool_call.tool:
+                # 覆盖 ""、"None"（JSON null 被 str 化）、"null" 等退化形态
+                if tool_call.tool in (None, "", "None", "null"):
                     self._trace("tool_call", f"(空工具名) {response[:100]}")
                     result = ToolResult.error(
                         "工具名为空（JSON 格式异常）。"
@@ -271,19 +286,26 @@ class Agent:
     # 内部：规划轮
     # ──────────────────────────────────────────
 
-    async def _plan(self, task: str) -> str:
+    async def _plan(self, task: str) -> tuple[str, str]:
         """
-        规划轮：生成研究计划。
+        规划轮：先探索项目结构，再生成研究计划。
 
         对齐 Claude Code 的 "Explore → plan → code"：
         先探索项目结构（list_files），再基于实际内容规划维度——
         避免"空规划"（模型不了解代码库，按用户问题的关键词猜维度，
         而实际代码库可能完全没有这些内容）。
 
+        探索结果返回给调用方，作为主循环消息锚点
+        （避免主循环模型不知道"结构已探索"，重复调 list_files）。
+
         计划不强制 JSON 解析（小模型输出不稳定）——
         直接作为文本锚点使用，模型自己理解。
+
+        Returns:
+            (structure, plan)：项目文件结构 + 研究计划文本
         """
         # 先探索：获取项目文件结构（若工具不可用则降级为无结构）
+        # 与主循环一致：工具调用用统一的 tool_call/tool_result 事件记录
         structure = "（无法获取项目结构）"
         if self.tools.get("list_files") is not None:
             self._trace("tool_call", "list_files {'pattern': '*'}")
@@ -298,13 +320,27 @@ class Agent:
                 content=f"项目文件结构：\n{structure}\n\n研究主题：{task}",
             ),
         ])
-        return response.strip()
+        return structure, response.strip()
 
     # ──────────────────────────────────────────
-    # 内部：Trace 记录
+    # 内部：Trace 记录 + 事件发布
     # ──────────────────────────────────────────
 
     def _trace(self, event: str, detail: str) -> None:
-        """记录一步执行（如果提供了 tracer）"""
+        """
+        记录一步执行（单一事件源）：
+        1. Tracer（权威记录，落盘）
+        2. EventBus（实时推送，前端流式展示）
+        两者同源，不重复埋点。
+        """
         if self.tracer:
             self.tracer.record(event, detail)
+        if self.event_bus and self.session_id:
+            # publish 是 async（未来 Redis 实现需要网络 I/O），
+            # _trace 是同步埋点——用 create_task 调度（fire-and-forget）
+            asyncio.create_task(
+                self.event_bus.publish(self.session_id, {
+                    "event": event,
+                    "detail": detail,
+                })
+            )
