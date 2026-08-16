@@ -232,13 +232,28 @@ async def test_duplicate_tool_call_detected(registry):
 
 
 @pytest.mark.asyncio
-async def test_empty_tool_name_rejected(registry):
+async def test_empty_tool_with_thought_is_final_answer(registry):
     """
-    空工具名（模型生成退化：tool=""）应明确报错并计入失败计数，
-    不执行空工具。
+    语义容错：tool=null/空 但 thought 有内容 = 模型在"思考后准备结束"，
+    应视为最终回答（返回 thought），而非报"工具名为空"错误。
     """
     llm = ScriptedLLM([
-        '{"thought": "调用工具", "tool": "", "arguments": {}}',  # 空 tool
+        '{"thought": "已有足够信息，无需再调用工具", "tool": null, "arguments": {}}',
+    ])
+    agent = Agent(llm=llm, tools=registry, max_steps=5)
+    result = await agent.run("调研")
+
+    assert result.completed is True
+    assert "已有足够信息" in result.answer
+    # 不应走"工具名为空"错误
+    assert "工具名为空" not in result.answer
+
+
+@pytest.mark.asyncio
+async def test_empty_tool_no_thought_rejected(registry):
+    """空工具名且无 thought（完全退化）→ 报错并计入失败计数"""
+    llm = ScriptedLLM([
+        '{"tool": "", "arguments": {}}',  # 空 tool，无 thought
         "回答完毕。",
     ])
     agent = Agent(llm=llm, tools=registry, max_steps=5)
@@ -262,24 +277,6 @@ async def test_empty_tool_name_gives_up_after_limit(registry):
 
     assert result.completed is False
     assert result.reason == "tool_errors"
-
-
-@pytest.mark.asyncio
-async def test_null_tool_name_rejected(registry):
-    """
-    模型输出 "tool": null（JSON null → "None"）→ 应被拦截，
-    不执行名为 "None" 的空工具。
-    """
-    llm = ScriptedLLM([
-        '{"thought": "调用工具", "tool": null, "arguments": {}}',  # null 工具名
-        "回答完毕。",
-    ])
-    agent = Agent(llm=llm, tools=registry, max_steps=5)
-    result = await agent.run("调研")
-
-    # 模型从错误中恢复，正常完成
-    assert result.completed is True
-    assert "回答完毕" in result.answer
 
 
 @pytest.mark.asyncio

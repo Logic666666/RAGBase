@@ -128,6 +128,12 @@ class Agent:
         # 2. 循环（try/finally 保证任何退出路径都保存 transcript）
         try:
             for step in range(self.max_steps):
+                # 上下文管理：消息历史超阈值时折叠早期轮次为摘要
+                # （对齐 Claude Code 的 autoCompact——每次 API 调用前检查）
+                if self.compressor.should_compact(messages):
+                    messages = await self.compressor.compact(messages)
+                    self._trace("compact", f"折叠早期轮次（保留最近 {self.compressor.keep_recent_rounds if hasattr(self.compressor, 'keep_recent_rounds') else ''} 轮）")
+
                 # 2a. LLM 推理
                 chat_response = await self.llm.chat_with_response(messages)
                 response = chat_response.content
@@ -181,10 +187,21 @@ class Agent:
                     self._trace("final_answer", response)
                     return AgentResult(answer=response, completed=True, steps=step + 1)
 
-                # 空工具名 = 生成退化（模型输出无效 JSON）：
-                # 明确报错而非执行空工具，计入失败计数（最终收敛终止）
-                # 覆盖 ""、"None"（JSON null 被 str 化）、"null" 等退化形态
+                # 空工具名 = 模型输出无效 JSON：
+                # 区分两种语义——
+                # 1) tool=null/空 但 thought 有内容：模型在"思考后准备结束"
+                #    （thought 如"已有足够信息，无需再调工具"）
+                #    → 视为最终回答，返回 thought 内容（语义容错）
+                # 2) 完全退化（空 thought + 空工具）→ 报错并计入失败计数
                 if tool_call.tool in (None, "", "None", "null"):
+                    if tool_call.thought:
+                        # 模型表达"不需要更多工具"——收尾思考即回答
+                        self._trace("final_answer", tool_call.thought)
+                        return AgentResult(
+                            answer=tool_call.thought,
+                            completed=True,
+                            steps=step + 1,
+                        )
                     self._trace("tool_call", f"(空工具名) {response[:100]}")
                     result = ToolResult.error(
                         "工具名为空（JSON 格式异常）。"

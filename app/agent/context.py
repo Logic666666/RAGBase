@@ -21,6 +21,8 @@ Claude Code 的做法（context-window 文档）：
 
 from abc import ABC, abstractmethod
 
+from ..infrastructure.llm_client import Message
+
 
 class ContextCompressor(ABC):
     """
@@ -43,12 +45,12 @@ class ContextCompressor(ABC):
 
     @abstractmethod
     def should_compact(self, messages: list) -> bool:
-        """消息历史是否达到压缩阈值（预留扩展点）"""
+        """消息历史是否达到压缩阈值"""
         ...
 
     @abstractmethod
-    def compact(self, messages: list) -> list:
-        """压缩消息历史（预留：LLM 摘要方案后续实现）"""
+    async def compact(self, messages: list) -> list:
+        """压缩消息历史（折叠早期轮次为摘要）"""
         ...
 
 
@@ -85,8 +87,110 @@ class TrimCompressor(ContextCompressor):
         )
 
     def should_compact(self, messages: list) -> bool:
-        # 预留：本次不触发消息历史压缩（避免过度设计）
+        # 兜底实现：不主动压缩（只做工具结果裁剪）
         return False
 
-    def compact(self, messages: list) -> list:
+    async def compact(self, messages: list) -> list:
         return messages
+
+
+# 摘要生成提示词
+_SUMMARIZE_PROMPT = """\
+你是研究助手。以下是 Agent 早期检索轮次的记录（工具调用与结果）。
+请总结为一段"研究进展摘要"，要求：
+- 包含已收集的关键信息、来源路径、当前已确认的结论
+- 简洁（200 字内），保留关键事实
+- 只输出摘要文本，不要其他内容"""
+
+
+class SummaryCompressor(ContextCompressor):
+    """
+    消息历史摘要压缩（对齐 Claude Code 的 autoCompact）。
+
+    解决情境：研究报告多轮检索后，早期轮次（工具调用+结果）大量累积，
+    上下文被占满、模型注意力被稀释。
+
+    策略：
+      1. 阈值宽裕（max_rounds 轮后才触发）——避免过度压缩 thrashing
+      2. 只折叠早期轮次，保留最近 keep_recent_rounds 轮原文——
+         避免全量摘要丢失近期状态（Issue #58749）
+      3. system 锚点（工具列表/文件结构/研究计划）始终保留
+
+    折叠后的早期轮次由 LLM 生成一段"研究进展摘要"，
+    插入到保留的最近轮次之前。
+    """
+
+    def __init__(
+        self,
+        llm,
+        max_rounds: int = 8,
+        keep_recent_rounds: int = 3,
+        max_chars: int = 8000,
+    ):
+        """
+        Args:
+            llm:              用于生成摘要的 LLM 客户端
+            max_rounds:       超过 N 轮检索触发压缩（宽裕阈值防 thrashing）
+            keep_recent_rounds: 保留最近 N 轮原文（防全量摘要丢近期状态）
+            max_chars:        工具结果裁剪阈值（委托给内部 TrimCompressor）
+        """
+        # 组合：单轮裁剪委托给 TrimCompressor
+        self._trim = TrimCompressor(max_chars=max_chars)
+        self.llm = llm
+        self.max_rounds = max_rounds
+        self.keep_recent_rounds = keep_recent_rounds
+
+    def compress_tool_result(self, result: str) -> str:
+        """单轮工具结果裁剪（委托 TrimCompressor）"""
+        return self._trim.compress_tool_result(result)
+
+    def should_compact(self, messages: list) -> bool:
+        """按工具结果轮数判断是否触发压缩"""
+        tool_results = [
+            m for m in messages
+            if m.role == "user" and m.content.startswith("[工具结果")
+        ]
+        return len(tool_results) > self.max_rounds
+
+    async def compact(self, messages: list) -> list:
+        """
+        折叠早期轮次为摘要，保留最近 N 轮原文 + 全部 system 锚点。
+
+        消息结构：system 锚点 + user(任务) + [assistant+user] 轮次对
+        返回：system 锚点 + user(任务) + 摘要 + 最近 N 轮
+        """
+        system_msgs = [m for m in messages if m.role == "system"]
+        others = [m for m in messages if m.role != "system"]
+
+        if not others:
+            return messages
+        task = others[0]                    # user(任务)，保留
+        rounds = others[1:]                 # assistant+user 轮次对
+
+        # 轮次数不足（含最近保留 + 至少一轮可折叠）→ 不压缩
+        keep_count = self.keep_recent_rounds * 2  # assistant+user 成对
+        if len(rounds) <= keep_count + 2:
+            return messages
+
+        fold_msgs = rounds[:-keep_count]   # 早期轮次（折叠）
+        recent = rounds[-keep_count:]      # 最近 N 轮（保留原文）
+
+        summary = await self._summarize(fold_msgs)
+
+        return (
+            system_msgs
+            + [task]
+            + [Message(role="system", content=f"研究进展摘要（早期检索已折叠）：\n{summary}")]
+            + recent
+        )
+
+    async def _summarize(self, messages: list) -> str:
+        """用 LLM 把早期轮次总结为摘要"""
+        content = "\n".join(
+            f"[{m.role}]\n{m.content[:500]}" for m in messages
+        )
+        response = await self.llm.chat([
+            Message(role="system", content=_SUMMARIZE_PROMPT),
+            Message(role="user", content=content),
+        ])
+        return response.strip()

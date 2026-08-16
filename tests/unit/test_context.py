@@ -8,7 +8,7 @@
 
 import pytest
 
-from app.agent.context import TrimCompressor
+from app.agent.context import SummaryCompressor, TrimCompressor
 from app.agent.orchestrator import Agent
 from app.tools.base import BaseTool, ToolSpec
 from app.tools.registry import ToolRegistry
@@ -63,7 +63,100 @@ def test_should_compact_preview():
     """消息历史压缩预留接口：当前不触发"""
     compressor = TrimCompressor()
     assert compressor.should_compact([]) is False
-    assert compressor.compact([]) == []
+    import asyncio
+    assert asyncio.run(compressor.compact([])) == []
+
+
+# ──────────────────────────────────────────────
+# SummaryCompressor（消息历史摘要）
+# ──────────────────────────────────────────────
+
+class FakeLLM:
+    """返回固定摘要的 mock LLM"""
+
+    def __init__(self, summary="已收集关键信息A、B，来源文件x.py"):
+        self.summary = summary
+        self.calls = 0
+
+    async def chat(self, messages):
+        self.calls += 1
+        return self.summary
+
+
+def _make_history(rounds: int):
+    """构造消息历史：system + user(任务) + N 轮 (assistant+user)"""
+    from app.infrastructure.llm_client import Message
+    messages = [
+        Message(role="system", content="工具列表"),
+        Message(role="user", content="调研任务"),
+    ]
+    for i in range(rounds):
+        messages.append(Message(
+            role="assistant",
+            content=f'{{"tool": "search_kb", "arguments": {{"query": "q{i}"}}}}',
+        ))
+        messages.append(Message(
+            role="user",
+            content=f"[工具结果 search_kb]\n第{i}轮结果内容",
+        ))
+    return messages
+
+
+def test_summary_should_compact_threshold():
+    """超过轮数阈值才触发压缩"""
+    llm = FakeLLM()
+    compressor = SummaryCompressor(llm=llm, max_rounds=3, keep_recent_rounds=1)
+
+    assert compressor.should_compact(_make_history(3)) is False  # 等于阈值不触发
+    assert compressor.should_compact(_make_history(4)) is True   # 超过触发
+
+
+@pytest.mark.asyncio
+async def test_summary_compacts_early_rounds():
+    """折叠早期轮次为摘要，保留最近 N 轮原文 + system 锚点"""
+    from app.infrastructure.llm_client import Message
+    llm = FakeLLM()
+    compressor = SummaryCompressor(llm=llm, max_rounds=3, keep_recent_rounds=1)
+
+    history = _make_history(5)  # 5 轮 > 阈值
+    result = await compressor.compact(history)
+
+    roles = [m.role for m in result]
+    # system 锚点保留 + user(任务) + 摘要 + 最近 1 轮(assistant+user)
+    assert roles.count("system") == 2  # 工具列表 + 摘要
+    assert "研究进展摘要" in result[2].content
+    # 最近 1 轮原文保留（assistant + user 对）
+    assert result[-2].role == "assistant"
+    assert result[-1].content.startswith("[工具结果")
+    # 早期轮次被折叠（消息数大幅减少）
+    assert len(result) < len(history)
+    # LLM 被调用来生成摘要
+    assert llm.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_summary_keeps_all_system_anchors():
+    """所有 system 锚点（工具列表/文件结构/研究计划）必须保留"""
+    from app.infrastructure.llm_client import Message
+    llm = FakeLLM()
+    compressor = SummaryCompressor(llm=llm, max_rounds=2, keep_recent_rounds=1)
+
+    history = [
+        Message(role="system", content="工具列表"),
+        Message(role="system", content="项目文件结构"),
+        Message(role="system", content="研究计划"),
+        Message(role="user", content="任务"),
+    ]
+    for i in range(4):
+        history.append(Message(role="assistant", content=f'{{"tool": "x"}}'))
+        history.append(Message(role="user", content=f"[工具结果 x]\n结果{i}"))
+
+    result = await compressor.compact(history)
+    system_contents = [m.content for m in result if m.role == "system"]
+    assert "工具列表" in system_contents[0]
+    assert "项目文件结构" in system_contents[1]
+    assert "研究计划" in system_contents[2]
+    assert "研究进展摘要" in system_contents[3]
 
 
 # ──────────────────────────────────────────────
