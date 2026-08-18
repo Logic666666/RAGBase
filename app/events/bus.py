@@ -45,15 +45,26 @@ class InMemoryEventBus(EventBus):
 
     每个订阅者一个队列（按 session_id 分组）。
     慢消费者保护：队列满时丢弃新事件（避免阻塞 Agent 主流程）。
+    晚订阅者补偿：保存每个会话的最近事件历史，订阅时重放——
+    否则 SSE 连接晚于事件发布（如规划轮的 list_files 在任务提交后
+    毫秒级完成）时，开头的事件永久丢失，前端看不到完整过程。
     """
 
-    def __init__(self, max_queue_size: int = 200):
+    def __init__(self, max_queue_size: int = 200, replay_limit: int = 200):
         self._subscribers: dict[str, set[asyncio.Queue]] = {}
+        self._history: dict[str, list[dict]] = {}
         self.max_queue_size = max_queue_size
+        self.replay_limit = replay_limit
 
     def subscribe(self, session_id: str) -> asyncio.Queue:
         queue = asyncio.Queue(maxsize=self.max_queue_size)
         self._subscribers.setdefault(session_id, set()).add(queue)
+        # 重放已发布的历史事件（晚订阅者补看开头）
+        for event in self._history.get(session_id, []):
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                break
         return queue
 
     def unsubscribe(self, session_id: str, queue: asyncio.Queue) -> None:
@@ -62,8 +73,15 @@ class InMemoryEventBus(EventBus):
             subscribers.discard(queue)
             if not subscribers:
                 self._subscribers.pop(session_id, None)
+                # 无订阅者时清历史（追溯权威在 SessionStore/trace）
+                self._history.pop(session_id, None)
 
     async def publish(self, session_id: str, event: dict) -> None:
+        # 先入历史（供晚订阅者重放），有界丢弃最旧
+        history = self._history.setdefault(session_id, [])
+        history.append(event)
+        if len(history) > self.replay_limit:
+            del history[: len(history) - self.replay_limit]
         for queue in list(self._subscribers.get(session_id, ())):
             try:
                 queue.put_nowait(event)

@@ -22,6 +22,7 @@ Agent 循环（ReAct Orchestrator）
 
 import asyncio
 import json
+import re
 from typing import TYPE_CHECKING
 
 from ..infrastructure.llm_client import Message, OllamaChatClient
@@ -78,6 +79,12 @@ class Agent:
         # 运行结束后可读取（agent.history），
         # 由 SessionManager 落盘，支持恢复执行（resume）与追溯
         self.history: list[dict] = []
+        # 提前收尾质疑标志（仅质疑一次，防死循环）
+        self._final_questioned = False
+        # 收尾确认标志（仅要求一次纯文本回答，防死循环）
+        self._final_asked = False
+        # 文件清单总数（_plan 阶段从 list_files 结果解析，供收尾质疑）
+        self._total_files = 0
 
     async def run(self, task: str) -> AgentResult:
         """
@@ -106,6 +113,11 @@ class Agent:
         structure, plan = await self._plan(task)
         self._trace("plan", plan)
 
+        # 文件清单总数（供提前收尾质疑）：
+        # list_files 输出格式稳定（"共 N 个文件：..."），解析失败则质疑不触发
+        m = re.search(r"共 (\d+) 个文件", structure)
+        self._total_files = int(m.group(1)) if m else 0
+
         # 2. 构建消息历史：
         #   探索结果 + 研究计划作为 system 消息锚点—
         #   主循环模型能直接看到"项目结构已探索"，不会重复调 list_files
@@ -131,8 +143,13 @@ class Agent:
                 # 上下文管理：消息历史超阈值时折叠早期轮次为摘要
                 # （对齐 Claude Code 的 autoCompact——每次 API 调用前检查）
                 if self.compressor.should_compact(messages):
-                    messages = await self.compressor.compact(messages)
-                    self._trace("compact", f"折叠早期轮次（保留最近 {self.compressor.keep_recent_rounds if hasattr(self.compressor, 'keep_recent_rounds') else ''} 轮）")
+                    new_messages = await self.compressor.compact(messages)
+                    # 仅在实际折叠时记录事件：
+                    # compact 可能因轮次不足/摘要失败返回原消息（降级契约），
+                    # 此时记录"已折叠"会误导观测
+                    if new_messages is not messages:
+                        self._trace("compact", f"折叠早期轮次（保留最近 {self.compressor.keep_recent_rounds if hasattr(self.compressor, 'keep_recent_rounds') else ''} 轮）")
+                    messages = new_messages
 
                 # 2a. LLM 推理
                 chat_response = await self.llm.chat_with_response(messages)
@@ -195,6 +212,66 @@ class Agent:
                 # 2) 完全退化（空 thought + 空工具）→ 报错并计入失败计数
                 if tool_call.tool in (None, "", "None", "null"):
                     if tool_call.thought:
+                        # 提前收尾质疑（分级）：
+                        # 小模型常见退化——未读完清单中的文件就想收尾。
+                        # 0 阅读 = 硬错误：未读任何文件就"分析所有文章"必然编造，
+                        #   不给"信息已足够"退路，计入失败计数防死循环；
+                        # 部分阅读 = 软质疑（仅一次）：读了部分可以诚实收尾
+                        #   （报告须说明未读原因），第二次收尾即接受
+                        read_count = self._read_file_count(messages)
+                        if (
+                            self._total_files > 0
+                            and read_count < self._total_files
+                        ):
+                            if read_count == 0:
+                                hint = (
+                                    "你尚未阅读任何文件。"
+                                    "任务要求分析全部文档，未阅读即输出报告"
+                                    "会基于编造内容。请先阅读文件，"
+                                    "再基于实际内容输出报告。"
+                                )
+                                self._trace("final_question", hint)
+                                messages.append(Message(role="assistant", content=response))
+                                messages.append(Message(role="user", content=f"[任务提示]\n{hint}"))
+                                parse_failures += 1
+                                if parse_failures >= self.max_parse_failures:
+                                    self._trace("give_up", "连续未阅读即收尾，终止循环")
+                                    return AgentResult(
+                                        answer="Agent 未阅读任何文件就试图结束，任务未能完成。"
+                                               "最后一次错误: " + hint,
+                                        completed=False,
+                                        steps=step + 1,
+                                        reason="tool_errors",
+                                    )
+                                continue
+                            if not self._final_questioned:
+                                self._final_questioned = True
+                                hint = (
+                                    f"你已阅读 {read_count}/{self._total_files} 个文件，"
+                                    "任务尚未覆盖清单中的全部文档。"
+                                    "若信息已足够，请直接输出完整最终报告"
+                                    "（报告中需说明未阅读文件及原因）；"
+                                    "否则请继续阅读剩余文件。"
+                                )
+                                self._trace("final_question", hint)
+                                messages.append(Message(role="assistant", content=response))
+                                messages.append(Message(role="user", content=f"[任务提示]\n{hint}"))
+                                continue
+                        # 收尾确认（仅一次）：
+                        # 模型常把"收尾声明"（thought=我打算输出报告）当输出，
+                        # 直接接受会把声明当回答，任务"完成"了却没有报告。
+                        # 要求纯文本回答——意图正确时模型下一轮即输出正文；
+                        # 第二次收尾才接受（有界，防死循环）
+                        if not self._final_asked:
+                            self._final_asked = True
+                            hint = (
+                                "你已结束工具调用。请直接以纯文本输出"
+                                "最终回答/报告正文（不要输出 JSON 或工具调用格式）。"
+                            )
+                            self._trace("final_question", hint)
+                            messages.append(Message(role="assistant", content=response))
+                            messages.append(Message(role="user", content=f"[任务提示]\n{hint}"))
+                            continue
                         # 模型表达"不需要更多工具"——收尾思考即回答
                         self._trace("final_answer", tool_call.thought)
                         return AgentResult(
@@ -235,11 +312,20 @@ class Agent:
                 )
                 if call_key in seen_calls:
                     # 只报事实，不引导具体工具（工具选择依据见系统提示中的工具选择指南）
-                    result = ToolResult.error(
-                        f"重复调用：你已用相同参数调用过 {tool_call.tool}，"
-                        f"反复相同调用不会产生新结果。"
-                        f"请参照工具选择指南更换策略后重试。"
-                    )
+                    if tool_call.tool == "list_files":
+                        # list_files 特化：结构已探索且结果在消息历史中，
+                        # 重复列出不会产生新信息——引导转向阅读（防空转）
+                        result = ToolResult.error(
+                            "文件列表已存在于消息历史（文件结构锚点），"
+                            "重复列出不会产生新信息。"
+                            "请基于清单直接阅读文件，再输出报告。"
+                        )
+                    else:
+                        result = ToolResult.error(
+                            f"重复调用：你已用相同参数调用过 {tool_call.tool}，"
+                            f"反复相同调用不会产生新结果。"
+                            f"请参照工具选择指南更换策略后重试。"
+                        )
                 else:
                     seen_calls.add(call_key)
                     result = await self.tools.execute(tool_call.tool, tool_call.arguments)
@@ -298,6 +384,35 @@ class Agent:
                 {"role": m.role, "content": m.content}
                 for m in messages
             ]
+
+    # ──────────────────────────────────────────
+    # 内部：提前收尾质疑辅助
+    # ──────────────────────────────────────────
+
+    def _read_file_count(self, messages: list) -> int:
+        """
+        已成功阅读的文件数：
+          - 当前消息中的 read_pdf / read_file 成功结果
+          - 摘要消息中的"已阅读文件"清单（折叠轮次的文件已被折叠为摘要，
+            清单是它们的唯一记录——否则压缩后计数骤降，质疑会误报）
+
+        仅报事实（读过几个文件），供提前收尾质疑判断；
+        不解析任务语义——"没读完"是事实，"必须读完"由模型/提示词决定。
+        """
+        count = sum(
+            1 for m in messages
+            if m.role == "user"
+            and (
+                m.content.startswith("[工具结果 read_pdf]")
+                or m.content.startswith("[工具结果 read_file]")
+            )
+        )
+        for m in messages:
+            if m.role == "system" and m.content.startswith("研究进展摘要"):
+                for line in m.content.splitlines():
+                    if line.startswith("已阅读文件："):
+                        count += len([p for p in line[len("已阅读文件："):].split("、") if p])
+        return count
 
     # ──────────────────────────────────────────
     # 内部：规划轮

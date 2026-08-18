@@ -63,6 +63,43 @@ async def test_slow_consumer_not_blocking():
 
 
 @pytest.mark.asyncio
+async def test_late_subscriber_replays_history():
+    """
+    晚订阅者重放历史事件：SSE 连接晚于事件发布时
+    （如规划轮的 list_files 在任务提交后毫秒级完成），
+    订阅后仍能看到全部已发布事件，不丢开头。
+    """
+    bus = InMemoryEventBus()
+    # 事件先发布（无订阅者）
+    await bus.publish("session_a", {"event": "tool_call", "detail": "list_files"})
+    await bus.publish("session_a", {"event": "plan", "detail": "研究计划"})
+
+    # 晚订阅 → 重放已发布的历史
+    q = bus.subscribe("session_a")
+    events = []
+    for _ in range(2):
+        events.append(await asyncio.wait_for(q.get(), timeout=1))
+
+    assert [e["event"] for e in events] == ["tool_call", "plan"]
+
+
+@pytest.mark.asyncio
+async def test_history_cleared_after_unsubscribe():
+    """退订后历史清除：无订阅者的会话不再保留缓冲"""
+    bus = InMemoryEventBus()
+    q = bus.subscribe("session_a")
+    await bus.publish("session_a", {"event": "plan", "detail": "计划A"})
+    bus.unsubscribe("session_a", q)
+
+    # 重新订阅 → 历史已清空，收不到旧事件
+    q2 = bus.subscribe("session_a")
+    await bus.publish("session_a", {"event": "plan", "detail": "计划B"})
+    assert q2.empty() is False
+    event = await asyncio.wait_for(q2.get(), timeout=1)
+    assert event["detail"] == "计划B"  # 只有新事件，无旧事件重放
+
+
+@pytest.mark.asyncio
 async def test_agent_publishes_to_bus():
     """Agent 执行时事件发布到 EventBus（_trace 单一事件源）"""
     from app.events import InMemoryEventBus

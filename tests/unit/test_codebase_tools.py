@@ -135,6 +135,31 @@ async def test_read_file_truncates_long(codebase):
     assert "已截断" in result
 
 
+@pytest.mark.asyncio
+async def test_read_file_rejects_pdf(codebase):
+    """PDF 文档返回明确错误（引导 read_pdf），不返回二进制乱码"""
+    tool = ReadFileTool(codebase)
+    pdf_file = os.path.join(codebase, "paper.pdf")
+    with open(pdf_file, "wb") as f:
+        f.write(b"%PDF-1.5\n" + b"\x00" * 500)
+    result = await tool.run("paper.pdf")
+    assert "read_pdf" in result
+    assert "PDF" in result
+    # 不返回乱码正文
+    assert "\x00" not in result
+
+
+@pytest.mark.asyncio
+async def test_read_file_rejects_binary(codebase):
+    """含 null 字节的二进制文件返回明确错误"""
+    tool = ReadFileTool(codebase)
+    bin_file = os.path.join(codebase, "data.bin")
+    with open(bin_file, "wb") as f:
+        f.write(b"\x00\x01\x02binary\x00\xff")
+    result = await tool.run("data.bin")
+    assert "二进制" in result
+
+
 # ──────────────────────────────────────────────
 # list_files
 # ──────────────────────────────────────────────

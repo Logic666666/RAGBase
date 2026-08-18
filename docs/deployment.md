@@ -1,6 +1,6 @@
 # 云服务器部署指南
 
-本文档详细说明如何将 AI RAG Knowledge Base 项目部署到云服务器上。
+本文档详细说明如何将 AI RAG Knowledge 项目(含 Agent 研究助手)部署到云服务器上。
 
 ## 前置要求
 
@@ -83,8 +83,13 @@ nano .env
 OLLAMA_BASE_URL=http://ollama:11434
 
 # 模型配置
-EMBEDDING_MODEL=deepseek-r1:1.5b
-CHAT_MODEL=deepseek-r1:1.5b
+EMBEDDING_MODEL=bge-m3
+CHAT_MODEL=qwen3.5:2b
+
+# Agent 上下文配置
+LLM_THINK=false        # 关闭思考模式(think 与正文共用 num_predict,思考长会挤爆正文)
+LLM_MAX_TOKENS=8192    # 单次生成上限
+LLM_NUM_CTX=16384      # 上下文窗口(研究报告多轮工具结果占用大)
 
 # Nginx 端口配置
 HTTP_PORT=80
@@ -270,8 +275,9 @@ docker exec -it rag-ollama bash
 # 检查模型列表
 ollama list
 
-# 拉取模型
-ollama pull deepseek-r1:1.5b
+# 拉取模型(对话 + 嵌入)
+ollama pull qwen3.5:2b
+ollama pull bge-m3
 ```
 
 ### 3. Nginx 502 错误

@@ -159,6 +159,16 @@ class ReadFileTool(BaseTool):
         if not os.path.isfile(full_path):
             return f"文件不存在: {path}"
 
+        # 二进制/PDF 拒绝：read_file 是文本阅读工具，
+        # 对二进制（PDF 等）返回乱码既浪费轮次又污染上下文——
+        # 检测文件头魔数，明确引导专用工具（模型常见错误：read_file 读 PDF）
+        with open(full_path, "rb") as f:
+            head = f.read(1024)
+        if head.startswith(b"%PDF"):
+            return f"这是 PDF 文档: {path},read_file 无法提取文本,请使用 read_pdf 工具读取。"
+        if b"\x00" in head:
+            return f"疑似二进制文件: {path},无法以文本读取。"
+
         with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
 

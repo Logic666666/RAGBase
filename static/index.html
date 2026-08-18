@@ -1307,21 +1307,33 @@
       if (status.status === 'done') break;
     }
 
-    // 3. 取结果并渲染
+    // 3. 取结果并渲染：
+    //    SSE 已实时渲染过完整流程（streamFlow 预览版），
+    //    这里用正式版（含耗时/统计）替换其内容，避免重复渲染两遍
     const resultRes = await fetch(`/agent/result/${sessionId}`);
     const j = await resultRes.json();
     loadingEl.remove();
 
     if (resultRes.ok && j.answer) {
       const srcs = extractSourcesFromTrace(j.trace?.events || []);
-      addAgentMessage(renderAgentFlow(j.trace?.events || [], j.answer, srcs,
-        j.trace?.total_duration_ms || null, j.completed, j.reason));
+      const html = renderAgentFlow(j.trace?.events || [], j.answer, srcs,
+        j.trace?.total_duration_ms || null, j.completed, j.reason);
+      if (streamFlow) {
+        // SSE 流式容器还在 → 原地升级为正式版（不新增消息）
+        streamFlow.innerHTML = html;
+        scrollToBottom();
+      } else {
+        // SSE 未渲染过（连接建立失败等）→ 新建消息
+        addAgentMessage(html);
+      }
+      resetStreamFlow();
       loadSessions();  // 任务完成，刷新历史会话列表
       if (!j.completed) {
         toast('任务未完全完成（步数限制）', 'info');
       }
       toast('回答完成', 'success');
     } else {
+      resetStreamFlow();
       addAgentMessage(`<div style="color:var(--error);padding:12px;background:var(--error-bg);border-radius:var(--radius);font-size:.85rem;">${esc(j.error || '获取答案失败')}</div>`);
     }
   }

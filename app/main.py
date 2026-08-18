@@ -14,6 +14,7 @@ from .core.config import get_settings, Settings
 from .services.kb import KnowledgeBaseService
 from .services.rag import RagService
 from .agent.orchestrator import Agent
+from .agent.context import SummaryCompressor
 from .tools.registry import ToolRegistry
 from .tools.builtin.knowledge_base import KnowledgeBaseTool
 from .tools.builtin.codebase import GrepCodeTool, ReadFileTool, ListFilesTool
@@ -177,11 +178,19 @@ def build_agent(settings: Settings, kb: str, session_id: str, max_steps: int = 5
         max_tokens=settings.llm_max_tokens,
         num_ctx=settings.llm_num_ctx,
     )
+    # 消息历史摘要压缩（对齐 Claude Code 的 autoCompact）：
+    # 触发阈值与上下文窗口联动——轮次预算 ≈ 窗口 60%
+    # （其余留给 system 锚点与模型输出；按 1 字符 ≈ 1 token 估算中文）
+    compressor = SummaryCompressor(
+        llm=llm,
+        trigger_chars=int(settings.llm_num_ctx * 0.6),
+    )
     return Agent(
         llm=llm,
         tools=registry,
         tracer=Tracer(),
         max_steps=max_steps,
+        compressor=compressor,
         event_bus=get_event_bus(),
         session_id=session_id,
     )
